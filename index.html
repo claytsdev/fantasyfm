@@ -1198,7 +1198,7 @@ Read the table. For EVERY player whose name appears in my squad list above, extr
 - goals: the number in the "${t('stats_goals_col')}" column. 0 if dash or empty.
 - assists: the number in the "${t('stats_assists_col')}" column. 0 if dash or empty.
 - rating: the decimal number in the "${t('stats_rating_col')}" column (far right coloured pill). 0 if dash (-).
-- time_played: read the "Time" or "Temps" column (second column, shows substitution minute e.g. "65" or "79"). If blank/empty the player played the full match — use 90. If there is a number, use that number. CRITICAL: if the player's rating is a dash (-) AND their Run distance is 0.0km, they did not play — use 0.
+- time_played: look at the "Time" column (second column). Rules: (1) If blank/empty, the player started and played the full match — use 90. (2) If there is a number AND an arrow pointing LEFT (subbed OFF), the player started and was subbed off at that minute — use that number directly (e.g. "51" = 51 mins played). (3) If there is a number AND an arrow pointing RIGHT (subbed ON), the player came on as a substitute — calculate as 90 minus that number (e.g. came on at minute 51 = 90-51 = 39 mins played, came on at minute 88 = 2 mins played). (4) CRITICAL: if the player's rating is a dash (-) AND their Run distance is 0.0km, they did not play at all — use 0.
 - run_km: the numeric value from the Run column (e.g. "7.6km" → 7.6, "0.0km" → 0.0).
 
 Include ALL matching squad players even if they have 0 in every column.
