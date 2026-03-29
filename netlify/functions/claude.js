@@ -325,10 +325,10 @@ async function handleSupabase(body) {
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { headers });
       const existing = await r.json();
       if (existing.length > 0) {
-        const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0 }) });
+        const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null }) });
         result = await upd.json();
       } else {
-        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
+        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
         result = await ins.json();
       }
     }
