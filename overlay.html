@@ -275,18 +275,23 @@ async function fetchData() {
     const viewers = await viewersRes.json();
     if (!Array.isArray(events) || !Array.isArray(viewers)) return;
 
-    const playerScores = {};
-    events.forEach(e => {
-      if (!playerScores[e.player_name]) playerScores[e.player_name] = 0;
-      playerScores[e.player_name] += e.points;
-    });
+    // Build per-player score filtered by a lock timestamp.
+    // Mirrors getScore(name, fromTs) in index.html — only events AFTER the
+    // viewer locked their picks are counted, so late joiners aren't rewarded
+    // for goals that happened before they joined.
+    function getScore(name, fromTs = 0) {
+      return events
+        .filter(e => e.player_name === name && new Date(e.created_at).getTime() > fromTs)
+        .reduce((s, e) => s + Number(e.points), 0);
+    }
 
     const leaderboard = viewers
       .filter(v => v.locked)
       .map(v => {
-        let pts = (playerScores[v.pick_def]||0) + (playerScores[v.pick_mid]||0) + (playerScores[v.pick_att]||0);
+        const from = v.events_at_lock || 0;
+        let pts = getScore(v.pick_def, from) + getScore(v.pick_mid, from) + getScore(v.pick_att, from);
         if (v.pick_cap) {
-          const capBase = playerScores[v.pick_cap] || 0;
+          const capBase = getScore(v.pick_cap, from);
           const isAlso = v.pick_cap===v.pick_def || v.pick_cap===v.pick_mid || v.pick_cap===v.pick_att;
           pts += isAlso ? capBase : capBase * 2;
         }
