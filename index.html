@@ -1685,7 +1685,7 @@ function applyLang(){
 
 
 function sid(n){return n.replace(/[^a-zA-Z0-9]/g,'_');}
-function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.ts||0)>=fromTs).reduce((s,e)=>s+Number(e.points),0);}
+function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.ts||0)>fromTs).reduce((s,e)=>s+Number(e.points),0);}
 function getViewerScore(vname){
   const v=S.viewers[vname];if(!v)return 0;
   const picks=v.picks;
@@ -2017,7 +2017,9 @@ function pickPlayer(vname,pos,pname){
 async function lockPicks(vname){
   if(!S.viewers[vname])S.viewers[vname]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false};
   S.viewers[vname].locked=true;
-  S.viewers[vname].lockedAtTs=Date.now(); // timestamp: only score events after this moment
+  // Use max DB-sourced event ts at lock time (not Date.now()) to stay in DB clock space
+  const lastEventTs = S.events.length ? Math.max(...S.events.map(e=>e.ts||0)) : 0;
+  S.viewers[vname].lockedAtTs = lastEventTs;
   const v=S.viewers[vname];
   // Show dashboard immediately with local state - don't wait for DB
   showDash(vname);
