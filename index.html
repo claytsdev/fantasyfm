@@ -826,7 +826,7 @@ async function reloadFromDB(){
   S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
   // ── CRITICAL: update events so getScore() reflects latest DB state ──
   if(Array.isArray(events)){
-    S.events=events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString()}));
+    S.events=events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()}));
   }
   const prevViewers=S.viewers||{};
   S.viewers={};
@@ -837,7 +837,7 @@ async function reloadFromDB(){
         locked:v.locked,
         platform:v.platform||'manual',
         oauthId:v.oauth_id||null,
-        eventsAtLock:v.events_at_lock||0
+        lockedAtTs:v.events_at_lock||0
       };
     });
   }
@@ -854,9 +854,9 @@ async function reloadFromDB(){
     });
     // Preserve locked state from local if DB hasn't caught up yet
     if(prev.locked)S.viewers[name].locked=true;
-    // Preserve eventsAtLock — never let it decrease (DB returning 0 on a race would grant retroactive points)
-    if(prev.eventsAtLock && (!S.viewers[name].eventsAtLock || prev.eventsAtLock > S.viewers[name].eventsAtLock)){
-      S.viewers[name].eventsAtLock=prev.eventsAtLock;
+    // Preserve lockedAtTs — never let it decrease (DB returning 0 on a race would grant retroactive points)
+    if(prev.lockedAtTs && (!S.viewers[name].lockedAtTs || prev.lockedAtTs > S.viewers[name].lockedAtTs)){
+      S.viewers[name].lockedAtTs=prev.lockedAtTs;
     }
   });
   // Also restore from localStorage for current oauth user (covers brief window between lock and DB write)
@@ -1417,7 +1417,7 @@ async function applyMatch(){
     ));
     // Push to local state immediately so UI updates even if reloadFromDB is slow
     pendingMatch.forEach(ev=>{
-      S.events.push({player:ev.player,pos:ev.pos,eventType:ev.eventType,points:Number(ev.points),time:now});
+      S.events.push({player:ev.player,pos:ev.pos,eventType:ev.eventType,points:Number(ev.points),time:now,ts:Date.now()});
     });
     pendingMatch=[];
     pendingMatchResult=null;
@@ -1685,11 +1685,11 @@ function applyLang(){
 
 
 function sid(n){return n.replace(/[^a-zA-Z0-9]/g,'_');}
-function getScore(name,fromIdx=0){return S.events.slice(fromIdx).filter(e=>e.player===name).reduce((s,e)=>s+Number(e.points),0);}
+function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.ts||0)>=fromTs).reduce((s,e)=>s+Number(e.points),0);}
 function getViewerScore(vname){
   const v=S.viewers[vname];if(!v)return 0;
   const picks=v.picks;
-  const from=v.eventsAtLock||0; // only count events after they locked in
+  const from=v.lockedAtTs||0; // only count events after they locked in
   let total=0;
   // Base scores for DEF, MID, ATT
   if(picks.DEF)total+=getScore(picks.DEF,from);
@@ -1700,8 +1700,7 @@ function getViewerScore(vname){
   // (since their base was already counted above) so net = 2x not 3x.
   if(picks.CAP){
     const capScore=getScore(picks.CAP,from);
-    const capIsAlsoPick=[picks.DEF,picks.MID,picks.ATT].includes(picks.CAP);
-    if(capIsAlsoPick){
+    const capIsAlsoPick=[picks.DEF,picks.MID,picks.ATT].includes(picks.CAP);    if(capIsAlsoPick){
       // base already counted once above, add once more = 2x total
       total+=capScore;
     } else {
@@ -1740,7 +1739,7 @@ async function logEvt(name,pos,evt){
   const safeName=sanitise(name,60);const safePos=(['DEF','MID','ATT'].includes(pos)?pos:'DEF');
   if(!SC[safePos]||!SC[safePos][evt])return;
   await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:SC[safePos][evt]});
-  S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date().toLocaleTimeString()});
+  S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date().toLocaleTimeString(),ts:Date.now()});
   const el=document.getElementById('sc-'+sid(name));
   if(el){el.textContent=getScore(name);el.className='score-num has-pts';}
   refreshLog();refreshStats();renderLeague();
@@ -1759,7 +1758,7 @@ async function editScore(name, pos){
   const safeName = sanitise(name, 60);
   const safePos = (['DEF','MID','ATT'].includes(pos) ? pos : 'DEF');
   await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:'manual_adjust',points:diff});
-  S.events.push({player:name,pos,eventType:'manual_adjust',points:diff,time:new Date().toLocaleTimeString()});
+  S.events.push({player:name,pos,eventType:'manual_adjust',points:diff,time:new Date().toLocaleTimeString(),ts:Date.now()});
   renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
 }
 
@@ -1767,7 +1766,7 @@ async function logNeg(name,pos,evt,pts){
   const safeName=sanitise(name,60);const safePos=(['DEF','MID','ATT'].includes(pos)?pos:'DEF');
   const safePts=Number(pts);if(!isFinite(safePts)||safePts>0)return;
   await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:safePts});
-  S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date().toLocaleTimeString()});
+  S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date().toLocaleTimeString(),ts:Date.now()});
   const el=document.getElementById('sc-'+sid(name));
   if(el){const s=getScore(name);el.textContent=s;el.className='score-num'+(s>0?' has-pts':s<0?' has-pts':' ');}
   refreshLog();refreshStats();renderLeague();
@@ -1937,10 +1936,10 @@ async function joinGame(){
   S.sessionCode=code;
   S.isLive=true;
   S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
-  S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString()})):[];
+  S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
   S.viewers={};
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,eventsAtLock:v.events_at_lock||0};});
+    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0};});
   }
   if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false};
   // Restore any locally saved picks (in case they were picking before DB updated)
@@ -2018,7 +2017,7 @@ function pickPlayer(vname,pos,pname){
 async function lockPicks(vname){
   if(!S.viewers[vname])S.viewers[vname]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false};
   S.viewers[vname].locked=true;
-  S.viewers[vname].eventsAtLock=S.events.length; // only score events after this point
+  S.viewers[vname].lockedAtTs=Date.now(); // timestamp: only score events after this moment
   const v=S.viewers[vname];
   // Show dashboard immediately with local state - don't wait for DB
   showDash(vname);
@@ -2031,7 +2030,7 @@ async function lockPicks(vname){
     pick_mid:v.picks.MID,
     pick_att:v.picks.ATT,
     pick_cap:v.picks.CAP||null,
-    events_at_lock:S.viewers[vname].eventsAtLock||0,
+    events_at_lock:S.viewers[vname].lockedAtTs, // repurpose column to store ms timestamp
     locked:true,
     platform: oauthUser ? oauthUser.platform : 'manual',
     oauth_id: oauthUser ? oauthUser.oauthId : null,
@@ -2072,12 +2071,12 @@ function showDash(vname,updateDataset=true){
     </div>
   </div>`;
   ['DEF','MID','ATT'].forEach(pos=>{
-    const pname=picks[pos];const pts=pname?getScore(pname,v.eventsAtLock||0):0;
+    const pname=picks[pos];const pts=pname?getScore(pname,v.lockedAtTs||0):0;
     const isCap=pname&&picks.CAP===pname;
     html+=`<div class="player-row" style="margin-bottom:6px"><span class="badge b-${pos}">${posN[pos]}</span><span class="player-name-t" style="margin-left:4px">${pname||'&mdash;'}${isCap?'<span style="color:#f5c842;margin-left:6px;font-size:12px">★ CAP</span>':''}</span><span class="score-num ${pts>0?'has-pts':''}">${pts}</span>${isCap?'<span style="font-size:10px;color:#f5c842;margin-left:4px;font-family:var(--font-ui);font-weight:700">×2</span>':''}</div>`;
   });
   if(picks.CAP&&picks.CAP!==picks.DEF&&picks.CAP!==picks.MID&&picks.CAP!==picks.ATT){
-    const capPts=getScore(picks.CAP,v.eventsAtLock||0);
+    const capPts=getScore(picks.CAP,v.lockedAtTs||0);
     html+=`<div class="player-row" style="margin-bottom:6px;border-color:#f5c84244;background:#1a1600"><span class="badge" style="background:#2a2200;color:#f5c842">CAP</span><span class="player-name-t" style="margin-left:4px">${picks.CAP} <span style="color:#f5c842;font-size:12px">★</span></span><span class="score-num ${capPts>0?'has-pts':''}">${capPts*2}</span></div>`;
   }
   html+=`<button class="btn" onclick="document.getElementById('vp-join').style.display='block';document.getElementById('vp-dash').style.display='none'" style="margin-top:12px;font-size:11px">Switch account</button>`;
