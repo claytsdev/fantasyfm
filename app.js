@@ -11,7 +11,6 @@ const BONUS={motm:5,rating:1};
 const EL={goal:'Goal',assist:'Assist',clean_sheet:'Clean sheet',motm:'Player of the Match',rating:'Rating bonus',yellow_card:'Yellow card',red_card:'Red card',manual_adjust:'Manual adjustment'};
 const PL={DEF:'Defenders',MID:'Midfielders',ATT:'Attackers'};
 const CAP_MULTIPLIER=2; // Captain gets 2x points
-let pollInterval=null;
 
 // ── DB helpers ──────────────────────────────────────────────────────────────
 async function db(action,payload){
