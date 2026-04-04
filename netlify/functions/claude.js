@@ -346,6 +346,7 @@ async function handleSupabase(body) {
       } else result = [];
       await ablyPublish(payload.session_id, 'state_changed', { type: 'roster' });
     }
+    else if (action === 'get_roster') {
       const r = await fetch(`${base}/roster?session_id=eq.${payload.session_id}&select=name,pos`, { headers });
       result = await r.json();
     }
@@ -361,6 +362,7 @@ async function handleSupabase(body) {
       }
       await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer' });
     }
+    else if (action === 'get_viewers') {
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock`, { headers });
       result = await r.json();
     }
