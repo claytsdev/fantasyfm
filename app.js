@@ -124,13 +124,66 @@ function restoreUI(){
   }
 }
 
-function startPolling(){
+let pollInterval=null; // kept for fallback only
+let ablyClient=null;
+let ablyChannel=null;
+
+function startAbly(){
+  if(!S.sessionCode)return;
+  // Clean up any existing connection
+  stopAbly();
+
+  // If Ably SDK not loaded, fall back to polling
+  if(typeof Ably==='undefined'){
+    console.warn('Ably SDK not loaded — falling back to polling');
+    startPollingFallback();
+    return;
+  }
+
+  try{
+    ablyClient=new Ably.Realtime({
+      authUrl:'/.netlify/functions/claude',
+      authMethod:'POST',
+      authHeaders:{'Content-Type':'application/json'},
+      authParams:{action:'ably_token',payload:{session_id:S.sessionCode}}
+    });
+
+    ablyClient.connection.on('failed',()=>{
+      console.warn('Ably connection failed — falling back to polling');
+      stopAbly();
+      startPollingFallback();
+    });
+
+    const channelName=`ffm-${S.sessionCode}`;
+    ablyChannel=ablyClient.channels.get(channelName);
+    ablyChannel.subscribe('state_changed',async(msg)=>{
+      if(!S.sessionCode)return;
+      await reloadFromDB();
+      renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
+      const vdash=document.getElementById('vp-dash');
+      if(vdash&&vdash.style.display!=='none'){
+        const vname=vdash.dataset.viewer;
+        if(vname)showDash(vname,false);
+      }
+    });
+  }catch(e){
+    console.warn('Ably init error — falling back to polling',e);
+    startPollingFallback();
+  }
+}
+
+function stopAbly(){
+  if(ablyChannel){try{ablyChannel.unsubscribe();}catch(e){}ablyChannel=null;}
+  if(ablyClient){try{ablyClient.close();}catch(e){}ablyClient=null;}
+  if(pollInterval){clearInterval(pollInterval);pollInterval=null;}
+}
+
+function startPollingFallback(){
   if(pollInterval)clearInterval(pollInterval);
   pollInterval=setInterval(async()=>{
-    if(!S.sessionCode)return; // works for both streamer (isLive) and viewer (has code)
+    if(!S.sessionCode)return;
     await reloadFromDB();
     renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
-    // Refresh viewer dash if open
     const vdash=document.getElementById('vp-dash');
     if(vdash&&vdash.style.display!=='none'){
       const vname=vdash.dataset.viewer;
@@ -138,6 +191,9 @@ function startPolling(){
     }
   },5000);
 }
+
+// Legacy alias so any remaining callsites keep working
+function startPolling(){ startAbly(); }
 
 // goTab defined in auth section below
 
@@ -1449,7 +1505,7 @@ function renderLeague(){
 async function resetAll(){
   if(!confirm('Reset session? All scores and viewers will be cleared.'))return;
   if(S.sessionCode)await db('reset_session',{session_id:S.sessionCode});
-  if(pollInterval){clearInterval(pollInterval);pollInterval=null;}
+  stopAbly();
   S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false};
   save();
   document.getElementById('sp-upload').style.display='block';

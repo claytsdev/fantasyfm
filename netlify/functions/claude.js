@@ -1,3 +1,23 @@
+// ── Ably publish helper ──────────────────────────────────────────────────────
+async function ablyPublish(sessionCode, eventName, data) {
+  const key = process.env.ABLY_API_KEY;
+  if (!key) return; // graceful no-op if key not set
+  const channelName = `ffm-${sessionCode}`;
+  try {
+    await fetch(`https://rest.ably.io/channels/${encodeURIComponent(channelName)}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + Buffer.from(key).toString('base64')
+      },
+      body: JSON.stringify({ name: eventName, data })
+    });
+  } catch (e) {
+    // Non-fatal — clients will still get state on next manual reload
+    console.error('Ably publish failed:', e.message);
+  }
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' };
@@ -7,6 +27,7 @@ exports.handler = async function(event) {
     const body = JSON.parse(event.body);
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
+    if (body.action === 'ably_token') return await ablyToken(body.payload);
     if (body.action === 'create_checkout') return await createCheckout(body.payload);
     if (body.action === 'get_streamers') return await getStreamers();
     if (body.action === 'add_streamer') return await addStreamer(body.payload);
@@ -43,7 +64,42 @@ const sbHeaders = () => ({
 });
 const sbBase = () => `${process.env.SUPABASE_URL}/rest/v1`;
 
-async function handleLogin(payload) {
+async function ablyToken(payload) {
+  const key = process.env.ABLY_API_KEY;
+  if (!key) return { statusCode: 500, body: JSON.stringify({ error: 'Ably not configured' }) };
+
+  const sessionId = payload && payload.session_id ? payload.session_id : '*';
+  const channelName = `ffm-${sessionId}`;
+
+  // Issue a subscribe-only token request scoped to this session's channel
+  const [keyId, keySecret] = key.split(':');
+  const tokenRequest = {
+    keyName: keyId,
+    ttl: 3600000, // 1 hour in ms
+    capability: JSON.stringify({ [channelName]: ['subscribe'] }),
+    timestamp: Date.now(),
+    nonce: Math.random().toString(36).slice(2)
+  };
+
+  // Sign the token request
+  const crypto = require('crypto');
+  const stringToSign = [
+    tokenRequest.keyName,
+    tokenRequest.ttl,
+    tokenRequest.capability,
+    tokenRequest.nonce,
+    tokenRequest.timestamp
+  ].join('\n') + '\n';
+  tokenRequest.mac = crypto.createHmac('sha256', keySecret).update(stringToSign).digest('base64');
+
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tokenRequest)
+  };
+}
+
+
   const r = await fetch(`${process.env.SUPABASE_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'apikey': process.env.SUPABASE_ANON_KEY },
@@ -316,6 +372,7 @@ async function handleSupabase(body) {
         const r = await fetch(`${base}/roster`, { method: 'POST', headers, body: JSON.stringify(payload.players.map(p => ({ session_id: payload.session_id, name: p.name, pos: p.pos }))) });
         result = await r.json();
       } else result = [];
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'roster' });
     }
     else if (action === 'get_roster') {
       const r = await fetch(`${base}/roster?session_id=eq.${payload.session_id}&select=name,pos`, { headers });
@@ -331,6 +388,7 @@ async function handleSupabase(body) {
         const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
         result = await ins.json();
       }
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer', viewer_name: payload.viewer_name });
     }
     else if (action === 'get_viewers') {
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock`, { headers });
@@ -348,6 +406,7 @@ async function handleSupabase(body) {
       const safeName = String(payload.player_name).replace(/[<>"'`]/g,'').slice(0,60);
       const r = await fetch(`${base}/events`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, player_name: safeName, pos: payload.pos, event_type: payload.event_type, points: pts }) });
       result = await r.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'event', player_name: safeName, event_type: payload.event_type, points: pts });
     }
     else if (action === 'delete_last_event') {
       const r = await fetch(`${base}/events?session_id=eq.${payload.session_id}&order=id.desc&limit=1`, { headers });
@@ -355,6 +414,7 @@ async function handleSupabase(body) {
       if (events.length > 0) {
         await fetch(`${base}/events?id=eq.${events[0].id}`, { method: 'DELETE', headers });
         result = events[0];
+        await ablyPublish(payload.session_id, 'state_changed', { type: 'event_deleted' });
       } else result = null;
     }
     else if (action === 'get_events') {
@@ -401,6 +461,7 @@ async function handleSupabase(body) {
       await fetch(`${base}/viewers?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
       await fetch(`${base}/roster?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
       await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'DELETE', headers });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'reset' });
       result = { ok: true };
     }
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) };
