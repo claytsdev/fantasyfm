@@ -19,7 +19,7 @@ async function db(action,payload){
 }
 
 // ── Local state helpers ──────────────────────────────────────────────────────
-function save(){try{localStorage.setItem('ffm_state',JSON.stringify({sessionCode:S.sessionCode,isLive:S.isLive,viewerName:oauthUser?oauthUser.username:null}));}catch(e){}}
+function save(){try{localStorage.setItem('ffm_state',JSON.stringify({sessionCode:S.sessionCode,isLive:S.isLive,type:S.type,seasonEnd:S.seasonEnd,allowNewJoiners:S.allowNewJoiners,transfersPerViewer:S.transfersPerViewer,viewerName:oauthUser?oauthUser.username:null}));}catch(e){}}
 function saveAvatar(name,dataUrl){try{localStorage.setItem('ffm_av_'+name,dataUrl);}catch(e){}}
 function loadAvatar(name){try{return localStorage.getItem('ffm_av_'+name)||null;}catch(e){return null;}}
 function clearAvatars(){try{Object.keys(localStorage).filter(k=>k.startsWith('ffm_av_')).forEach(k=>localStorage.removeItem(k));}catch(e){}}
@@ -29,12 +29,16 @@ async function load(){
     const r=localStorage.getItem('ffm_state');
     if(r){
       const saved=JSON.parse(r);
-      if(saved.isLive&&saved.sessionCode){
+      if(saved.sessionCode){
         S.sessionCode=saved.sessionCode;
-        S.isLive=true;
+        S.isLive=saved.isLive||false;
+        S.type=saved.type||'oneoff';
+        S.seasonEnd=saved.seasonEnd||null;
+        S.allowNewJoiners=saved.allowNewJoiners!==undefined?saved.allowNewJoiners:true;
+        S.transfersPerViewer=saved.transfersPerViewer||3;
         // Reload from DB
         await reloadFromDB();
-        restoreUI();
+        if(saved.isLive)restoreUI();
       }
     }
   }catch(e){}
@@ -1105,8 +1109,8 @@ function showAddPlayerPanel(){
       <button class="btn btn-accent" onclick="addSeasonPlayer()" style="font-size:12px">Add player</button>
       <button class="btn" onclick="document.getElementById('season-add-player').remove()" style="font-size:12px">Cancel</button>
     </div>`;
-  const scoringCard=document.querySelector('#scoring-collapse')?.parentElement;
-  if(scoringCard)scoringCard.parentElement.insertBefore(panel,scoringCard);
+  const scoringCard=document.getElementById('scoring-collapse');
+  if(scoringCard&&scoringCard.parentElement)scoringCard.parentElement.insertBefore(panel,scoringCard);
 }
 
 async function addSeasonPlayer(){
@@ -1381,6 +1385,7 @@ async function joinGame(){
     }
   }catch(e){}
   if(S.viewers[name].locked)showDash(name);else showPicker(name);
+  save();
   startPolling();
 }
 
