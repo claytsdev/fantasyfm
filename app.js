@@ -1,4 +1,4 @@
-let S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false};
+let S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
 let pendingMatch=[];
 let pendingMatchResult=null;
 function sanitise(str,maxLen=100){
@@ -42,11 +42,19 @@ async function load(){
 
 async function reloadFromDB(){
   if(!S.sessionCode)return;
-  const [roster,events,viewers]=await Promise.all([
+  const [session,roster,events,viewers]=await Promise.all([
+    db('get_session',{session_id:S.sessionCode}),
     db('get_roster',{session_id:S.sessionCode}),
     db('get_events',{session_id:S.sessionCode}),
     db('get_viewers',{session_id:S.sessionCode})
   ]);
+  if(session){
+    S.isLive=session.is_live;
+    S.type=session.type||'oneoff';
+    S.seasonEnd=session.season_end||null;
+    S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
+    S.transfersPerViewer=session.transfers_per_viewer||3;
+  }
   S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
   // ── CRITICAL: update events so getScore() reflects latest DB state ──
   if(Array.isArray(events)){
@@ -61,7 +69,8 @@ async function reloadFromDB(){
         locked:v.locked,
         platform:v.platform||'manual',
         oauthId:v.oauth_id||null,
-        lockedAtTs:v.events_at_lock||0
+        lockedAtTs:v.events_at_lock||0,
+        transfersUsed:v.transfers_used||0
       };
     });
   }
@@ -121,6 +130,11 @@ function restoreUI(){
   if(checkStreamerAuth()){
     document.getElementById('nb-streamer').style.color='var(--accent)';
   }
+  // Restore season UI elements
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  if(seasonBadge)seasonBadge.style.display=S.type==='season'?'inline-block':'none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display=S.type==='season'?'inline-block':'none';
 }
 
 let pollInterval=null; // kept for fallback only
@@ -357,11 +371,57 @@ async function goLive(){
   const valid=S.roster.filter(p=>p.name.trim());
   if(!valid.some(p=>p.pos==='DEF')||!valid.some(p=>p.pos==='MID')||!valid.some(p=>p.pos==='ATT')){alert('You need at least one DEF, one MID, and one ATT.');return;}
   S.roster=valid;
+  // Show session type picker instead of going live immediately
+  showSessionTypeModal();
+}
+
+function showSessionTypeModal(){
+  const m=document.getElementById('session-type-modal');
+  if(m)m.style.display='flex';
+}
+function hideSessionTypeModal(){
+  const m=document.getElementById('session-type-modal');
+  if(m)m.style.display='none';
+}
+function showSeasonSetupModal(){
+  hideSessionTypeModal();
+  const m=document.getElementById('season-setup-modal');
+  if(m)m.style.display='flex';
+}
+function hideSeasonSetupModal(){
+  const m=document.getElementById('season-setup-modal');
+  if(m)m.style.display='none';
+}
+
+async function startOneOff(){
+  hideSessionTypeModal();
+  await _goLive('oneoff');
+}
+
+async function startSeason(){
+  const seasonEnd=document.getElementById('season-end-input').value;
+  const allowNewJoiners=document.getElementById('allow-new-joiners').checked;
+  const transfersPerViewer=parseInt(document.getElementById('transfers-per-viewer').value,10);
+  if(!seasonEnd){alert('Please set a season end date.');return;}
+  if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
+  hideSeasonSetupModal();
+  S.seasonEnd=new Date(seasonEnd).toISOString();
+  S.allowNewJoiners=allowNewJoiners;
+  S.transfersPerViewer=transfersPerViewer;
+  await _goLive('season');
+}
+
+async function _goLive(type){
   S.sessionCode=(()=>{const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='FM-';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return s;})();
-  S.isLive=true;S.events=[];S.viewers={};
-  // Save to DB
-  const _sjwt = localStorage.getItem('ffm_streamer_jwt')||null;
-  await db('create_session',{id:S.sessionCode, user_jwt:_sjwt});
+  S.isLive=true;S.type=type;S.events=[];S.viewers={};
+  const _sjwt=localStorage.getItem('ffm_streamer_jwt')||null;
+  const sessionPayload={id:S.sessionCode,user_jwt:_sjwt,type};
+  if(type==='season'){
+    sessionPayload.season_end=S.seasonEnd;
+    sessionPayload.allow_new_joiners=S.allowNewJoiners;
+    sessionPayload.transfers_per_viewer=S.transfersPerViewer;
+  }
+  await db('create_session',sessionPayload);
   await db('save_roster',{session_id:S.sessionCode,players:S.roster});
   save();
   document.getElementById('code-val').textContent=S.sessionCode;
@@ -373,6 +433,11 @@ async function goLive(){
   document.getElementById('live-panel').style.display='block';
   document.getElementById('lg-empty').style.display='none';
   document.getElementById('lg-panel').style.display='block';
+  // Show/hide season badge and settings button
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  if(seasonBadge)seasonBadge.style.display=type==='season'?'inline-block':'none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display=type==='season'?'inline-block':'none';
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
 }
 
@@ -795,6 +860,14 @@ const LANG = {
     err_entries_locked: 'New entries are currently closed. Wait for the streamer to open entries.',
     squad_prompt_positions: 'GK stays GK, DEF (defenders/CBs/fullbacks/wing-backs), MID (all midfielders including DM/AM), ATT (strikers/forwards/wingers).',
     stats_goals_col: 'Goals', stats_assists_col: 'Assists', stats_rating_col: 'Rating',
+    session_type_title: 'Start a new competition',
+    oneoff_label: 'One-off Session', oneoff_desc: 'Single stream. No transfers.',
+    season_label: 'New Season', season_desc: 'Runs across multiple streams. Viewers keep their picks.',
+    season_end_label: 'Season end date & time',
+    allow_new_joiners_label: 'Allow new viewers to join mid-season',
+    transfers_per_viewer_label: 'Transfers per viewer',
+    end_stream_btn: 'End Stream', season_settings_btn: 'Season Settings',
+    season_badge: 'SEASON',
   },
   fr: {
     home: 'Accueil', setup: 'Équipe', controls: 'Contrôles', viewer: 'Spectateur', table: 'Classement', streamer: 'Streamer',
@@ -869,6 +942,14 @@ const LANG = {
     err_entries_locked: 'Les nouvelles entrées sont fermées. Attendez le streamer.',
     squad_prompt_positions: 'GB=GK, D/DC/DL/DR/DLC/DRC=DEF, MD/MDC/MDG/MDD/M/MC/MG/MO/MOC/MOG/MOD/MCA=MID, BT/BTL/BTR/BTD=ATT. Output only: GK, DEF, MID, ATT.',
     stats_goals_col: 'Buts', stats_assists_col: 'Passes décisi...', stats_rating_col: 'Note',
+    session_type_title: 'Démarrer une compétition',
+    oneoff_label: 'Session unique', oneoff_desc: 'Un seul stream. Pas de transferts.',
+    season_label: 'Nouvelle saison', season_desc: 'Sur plusieurs streams. Les spectateurs gardent leurs choix.',
+    season_end_label: 'Date et heure de fin de saison',
+    allow_new_joiners_label: 'Autoriser de nouveaux joueurs en cours de saison',
+    transfers_per_viewer_label: 'Transferts par spectateur',
+    end_stream_btn: 'Terminer le stream', season_settings_btn: 'Paramètres saison',
+    season_badge: 'SAISON',
   },
   de: {
     home: 'Start', setup: 'Kader', controls: 'Steuerung', viewer: 'Zuschauer', table: 'Tabelle', streamer: 'Streamer',
@@ -943,6 +1024,14 @@ const LANG = {
     err_entries_locked: 'Neue Einträge sind gesperrt. Warte auf den Streamer.',
     squad_prompt_positions: 'TW=GK, IV/LA/RA/LV/RV/LMV/RMV=DEF, ZM/DM/OM/LM/RM/ZOM/ZDM/LAM/RAM=MID, ST/LS/RS=ATT. Output only: GK, DEF, MID, ATT.',
     stats_goals_col: 'Tore', stats_assists_col: 'Vorlagen', stats_rating_col: 'Note',
+    session_type_title: 'Neue Wettbewerb starten',
+    oneoff_label: 'Einzelsession', oneoff_desc: 'Nur ein Stream. Keine Transfers.',
+    season_label: 'Neue Saison', season_desc: 'Über mehrere Streams. Zuschauer behalten ihre Auswahl.',
+    season_end_label: 'Saisonende (Datum & Uhrzeit)',
+    allow_new_joiners_label: 'Neue Zuschauer mid-Saison erlauben',
+    transfers_per_viewer_label: 'Transfers pro Zuschauer',
+    end_stream_btn: 'Stream beenden', season_settings_btn: 'Saisoneinstellungen',
+    season_badge: 'SAISON',
   }
 };
 
@@ -1207,6 +1296,11 @@ async function joinGame(){
     if(_joinAttempts>=5){_joinBlock=Date.now()+60000;_joinAttempts=0;}
     err.style.display='block';err.textContent=t('err_not_found');return;
   }
+  // Populate season fields from session
+  S.type=session.type||'oneoff';
+  S.seasonEnd=session.season_end||null;
+  S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
+  S.transfersPerViewer=session.transfers_per_viewer||3;
   _joinAttempts=0;
   err.style.display='none';
   try{ localStorage.setItem('ffm_last_viewer_code', code); }catch(e){}
@@ -1219,9 +1313,16 @@ async function joinGame(){
   S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
   S.viewers={};
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0};});
+    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0};});
   }
-  if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false};
+  if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false,transfersUsed:0};
+  // Block new viewers if season doesn't allow new joiners
+  if(S.type==='season'&&!S.allowNewJoiners&&!S.viewers[name].locked){
+    err.style.display='block';
+    err.textContent='This season is not accepting new players.';
+    S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+    return;
+  }
   // Restore any locally saved picks (in case they were picking before DB updated)
   try{
     const savedPicks=localStorage.getItem('ffm_viewer_picks_'+name);
@@ -1362,6 +1463,7 @@ function showDash(vname,updateDataset=true){
     html+=`<div class="player-row" style="margin-bottom:6px;border-color:#f5c84244;background:#1a1600"><span class="badge" style="background:#2a2200;color:#f5c842">CAP</span><span class="player-name-t" style="margin-left:4px">${picks.CAP} <span style="color:#f5c842;font-size:12px">★</span></span><span class="score-num ${capPts>0?'has-pts':''}">${capPts*2}</span></div>`;
   }
   html+=`<button class="btn" onclick="document.getElementById('vp-join').style.display='block';document.getElementById('vp-dash').style.display='none'" style="margin-top:12px;font-size:11px">Switch account</button>`;
+  html+=renderTransferUI(vname);
   panel.innerHTML=html;
 }
 
@@ -1501,11 +1603,28 @@ function renderLeague(){
   }
 }
 
+async function handleEndOrReset(){
+  if(S.type==='season'){
+    if(!confirm('End this stream? Points are saved and your season stays open for the next stream.'))return;
+    await db('end_stream',{session_id:S.sessionCode});
+    S.isLive=false;
+    // Keep everything else — viewers rejoin next stream with same code
+    save();
+    // Update UI to reflect stream ended but season still active
+    document.getElementById('live-pill').style.display='none';
+    document.getElementById('sp-done').style.display='block';
+    const endBtn=document.getElementById('end-reset-btn');
+    if(endBtn)endBtn.textContent='▶ Start Next Stream';
+  } else {
+    await resetAll();
+  }
+}
+
 async function resetAll(){
   if(!confirm('Reset session? All scores and viewers will be cleared.'))return;
   if(S.sessionCode)await db('reset_session',{session_id:S.sessionCode});
   stopAbly();
-  S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false};
+  S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
   save();
   document.getElementById('sp-upload').style.display='block';
   document.getElementById('sp-roster').style.display='none';
@@ -1518,6 +1637,93 @@ async function resetAll(){
   document.getElementById('lg-panel').style.display='none';
   document.getElementById('squad-preview').style.display='none';
   document.getElementById('squad-file').value='';
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  if(seasonBadge)seasonBadge.style.display='none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display='none';
+}
+
+// ── Season settings editor ───────────────────────────────────────────────────
+function showSeasonSettingsModal(){
+  const m=document.getElementById('season-settings-modal');
+  if(!m)return;
+  document.getElementById('edit-season-end').value=S.seasonEnd?S.seasonEnd.slice(0,16):'';
+  document.getElementById('edit-allow-new-joiners').checked=S.allowNewJoiners;
+  document.getElementById('edit-transfers-per-viewer').value=S.transfersPerViewer;
+  m.style.display='flex';
+}
+function hideSeasonSettingsModal(){
+  const m=document.getElementById('season-settings-modal');
+  if(m)m.style.display='none';
+}
+async function saveSeasonSettings(){
+  const seasonEnd=document.getElementById('edit-season-end').value;
+  const allowNewJoiners=document.getElementById('edit-allow-new-joiners').checked;
+  const transfersPerViewer=parseInt(document.getElementById('edit-transfers-per-viewer').value,10);
+  if(!seasonEnd){alert('Please set a season end date.');return;}
+  if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
+  await db('update_season_settings',{session_id:S.sessionCode,season_end:new Date(seasonEnd).toISOString(),allow_new_joiners:allowNewJoiners,transfers_per_viewer:transfersPerViewer});
+  S.seasonEnd=new Date(seasonEnd).toISOString();
+  S.allowNewJoiners=allowNewJoiners;
+  S.transfersPerViewer=transfersPerViewer;
+  hideSeasonSettingsModal();
+}
+
+// ── Transfer UI (viewer side) ────────────────────────────────────────────────
+function renderTransferUI(vname){
+  if(S.type!=='season')return '';
+  const v=S.viewers[vname];
+  if(!v)return '';
+  const used=v.transfersUsed||0;
+  const total=S.transfersPerViewer||3;
+  const remaining=total-used;
+  const posLabels={DEF:'Defender',MID:'Midfielder',ATT:'Attacker',CAP:'Captain (2×)'};
+  const posKeys=['DEF','MID','ATT','CAP'];
+  const posOptions=(pos)=>{
+    const filterPos=pos==='CAP'?null:pos;
+    return S.roster
+      .filter(p=>filterPos?p.pos===filterPos:true)
+      .map(p=>`<option value="${p.name}"${v.picks[pos]===p.name?' selected':''}>${p.name}</option>`)
+      .join('');
+  };
+  if(remaining<=0){
+    return `<div class="transfer-panel" style="margin-top:16px;padding:12px 14px;background:var(--bg3);border-radius:8px;border:1px solid var(--border)">
+      <div style="font-size:13px;color:var(--txt3);text-align:center">All ${total} transfers used — picks locked for this season.</div>
+    </div>`;
+  }
+  return `<div class="transfer-panel" style="margin-top:16px;padding:14px;background:var(--bg3);border-radius:8px;border:1px solid var(--accent)44">
+    <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:10px">Transfers remaining: ${remaining}/${total}</div>
+    ${posKeys.map(pos=>`
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">${posLabels[pos]}</div>
+        <select id="transfer-${pos}" style="width:100%;background:var(--bg4);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">${posOptions(pos)}</select>
+      </div>`).join('')}
+    <button class="btn btn-accent" onclick="submitTransfers('${vname}')" style="width:100%;margin-top:8px;font-size:13px">Save transfers</button>
+  </div>`;
+}
+
+async function submitTransfers(vname){
+  if(!oauthUser)return;
+  const v=S.viewers[vname];
+  if(!v)return;
+  const posKeys=['DEF','MID','ATT','CAP'];
+  const changes=[];
+  for(const pos of posKeys){
+    const el=document.getElementById('transfer-'+pos);
+    if(el&&el.value!==v.picks[pos])changes.push({pos:('pick_'+pos.toLowerCase()),newPlayer:el.value,displayPos:pos});
+  }
+  if(!changes.length){alert('No changes detected.');return;}
+  const used=v.transfersUsed||0;
+  const remaining=S.transfersPerViewer-used;
+  if(changes.length>remaining){alert(`You only have ${remaining} transfer(s) remaining but made ${changes.length} change(s). Please reduce your changes.`);return;}
+  for(const {pos,newPlayer,displayPos} of changes){
+    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer});
+    if(res&&res.error){alert('Transfer failed: '+res.error);return;}
+    // Update local state
+    v.picks[displayPos]=newPlayer;
+    v.transfersUsed=(v.transfersUsed||0)+1;
+  }
+  showDash(vname);
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
