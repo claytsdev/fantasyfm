@@ -27,6 +27,7 @@
     <button class="nav-btn active" id="nb-home" onclick="goTab('home',this)" data-i18n="home">Home</button>
     <button class="nav-btn" id="nb-setup" onclick="goTab('setup',this)" data-i18n="setup">Setup</button>
     <button class="nav-btn" id="nb-live" onclick="goTab('live',this)" data-i18n="controls">Controls</button>
+    <button class="nav-btn" id="nb-squad" onclick="goTab('squad',this)" style="display:none">Squad</button>
     <button class="nav-btn" id="nb-viewer" onclick="goTab('viewer',this)" data-i18n="viewer">Viewer</button>
     <button class="nav-btn" id="nb-league" onclick="goTab('league',this)" data-i18n="table">Table</button>
     <button class="nav-btn" id="nb-streamer" onclick="goTab('streamer',this)" style="color:var(--accent)" data-i18n="streamer">Streamer</button>
@@ -40,7 +41,7 @@
     </button>
     <button class="lang-btn" data-lang="de" onclick="setLang('de')" title="Deutsch" style="font-family:var(--font-ui);font-size:10px;font-weight:700;padding:4px 8px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--txt3);cursor:pointer;opacity:0.5;display:flex;align-items:center;gap:4px">
       <svg width="16" height="11" viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg"><rect width="60" height="14" fill="#000"/><rect y="13" width="60" height="14" fill="#D00"/><rect y="26" width="60" height="14" fill="#FFCE00"/></svg>DE
-    </button> 
+    </button>
   </div>
 </div>
 
@@ -622,6 +623,30 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ── Squad Management (season mode only) ── -->
+  <div class="section" id="sec-squad">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div>
+          <div class="card-title" style="margin-bottom:2px">🏟️ Season Squad</div>
+          <div style="font-size:12px;color:var(--txt3)">Add or remove players from your season squad. Existing picks are unaffected.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <input id="squad-add-name" class="input-field" placeholder="Player name" style="flex:2;margin-bottom:0">
+        <select id="squad-add-pos" class="input-field" style="flex:1;margin-bottom:0">
+          <option value="DEF">DEF</option>
+          <option value="MID">MID</option>
+          <option value="ATT">ATT</option>
+        </select>
+        <button class="btn btn-accent" onclick="squadAddPlayer()" style="white-space:nowrap">+ Add</button>
+      </div>
+      <div id="squad-add-err" style="display:none;font-size:12px;color:var(--att);margin-bottom:10px"></div>
+      <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Current squad</div>
+      <div id="squad-manage-list"></div>
     </div>
   </div>
 

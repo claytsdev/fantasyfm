@@ -141,6 +141,7 @@ function restoreUI(){
   if(seasonBadge)seasonBadge.style.display=S.type==='season'?'inline-block':'none';
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=S.type==='season'?'inline-block':'none';
   if(endResetBtn)endResetBtn.textContent=S.type==='season'?'End Season':'Reset session';
+  updateSquadTab();
 }
 
 let pollInterval=null; // kept for fallback only
@@ -446,6 +447,7 @@ async function _goLive(type){
   if(seasonBadge)seasonBadge.style.display=type==='season'?'inline-block':'none';
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=type==='season'?'inline-block':'none';
   if(endResetBtn)endResetBtn.textContent=type==='season'?'End Season':'Reset session';
+  updateSquadTab();
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
 }
 
@@ -1126,13 +1128,6 @@ async function addSeasonPlayer(){
 
 function renderScoring(){
   const panel=document.getElementById('scoring-panel');panel.innerHTML='';
-  // Season mode: add player button at top
-  if(S.type==='season'&&S.sessionCode){
-    const addBtn=document.createElement('div');
-    addBtn.style.cssText='grid-column:1/-1;margin-bottom:4px';
-    addBtn.innerHTML=`<button class="btn" onclick="showAddPlayerPanel()" style="font-size:12px;border-color:var(--accent);color:var(--accent)">+ Add player to squad</button>`;
-    panel.appendChild(addBtn);
-  }
   const cols=window.innerWidth>=600?3:window.innerWidth>=400?2:1;
   panel.style.cssText='display:grid;grid-template-columns:repeat('+cols+',minmax(0,1fr));gap:14px;';
   const byPos={DEF:[],MID:[],ATT:[]};
@@ -1687,6 +1682,7 @@ async function resetAll(){
   const seasonSettingsBtn=document.getElementById('season-settings-btn');
   if(seasonBadge)seasonBadge.style.display='none';
   if(seasonSettingsBtn)seasonSettingsBtn.style.display='none';
+  updateSquadTab();
 }
 
 // ── Season settings editor ───────────────────────────────────────────────────
@@ -1715,8 +1711,57 @@ async function saveSeasonSettings(){
   hideSeasonSettingsModal();
 }
 
+// ── Squad management tab ─────────────────────────────────────────────────────
+function renderSquadManage(){
+  const list=document.getElementById('squad-manage-list');
+  if(!list)return;
+  if(!S.roster.length){list.innerHTML='<div style="font-size:13px;color:var(--txt3)">No players in squad.</div>';return;}
+  const byPos={DEF:[],MID:[],ATT:[]};
+  S.roster.forEach(p=>{if(byPos[p.pos])byPos[p.pos].push(p);});
+  list.innerHTML=['DEF','MID','ATT'].map(pos=>{
+    if(!byPos[pos].length)return'';
+    return`<div style="margin-bottom:14px">
+      <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">${PL[pos]}</div>
+      ${byPos[pos].map(p=>`
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+          ${posAvatar(p.pos,24)}
+          <span style="flex:1;font-size:13px;color:var(--txt)">${p.name}</span>
+          <button class="btn" onclick="squadRemovePlayer('${p.name.replace(/'/g,"\\'")}')" style="font-size:10px;padding:3px 8px;border-color:var(--att);color:var(--att)">Remove</button>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+async function squadAddPlayer(){
+  const nameEl=document.getElementById('squad-add-name');
+  const posEl=document.getElementById('squad-add-pos');
+  const errEl=document.getElementById('squad-add-err');
+  const name=sanitise(nameEl.value.trim(),60);
+  const pos=posEl.value;
+  errEl.style.display='none';
+  if(!name){errEl.style.display='block';errEl.textContent='Please enter a player name.';return;}
+  if(S.roster.find(p=>p.name.toLowerCase()===name.toLowerCase())){errEl.style.display='block';errEl.textContent='Player already in squad.';return;}
+  S.roster.push({name,pos});
+  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  nameEl.value='';
+  renderSquadManage();
+}
+
+async function squadRemovePlayer(name){
+  if(!confirm(`Remove ${name} from the squad? Their existing picks will remain but they won't be available for transfers.`))return;
+  S.roster=S.roster.filter(p=>p.name!==name);
+  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  renderSquadManage();
+}
+
+function updateSquadTab(){
+  const btn=document.getElementById('nb-squad');
+  if(btn)btn.style.display=S.type==='season'&&checkStreamerAuth()?'inline-block':'none';
+}
+
 // ── Transfer UI (viewer side) ────────────────────────────────────────────────
 function renderTransferUI(vname){
+  console.log('renderTransferUI called — S.type:',S.type,'S.transfersPerViewer:',S.transfersPerViewer,'viewer:',S.viewers[vname]);
   if(S.type!=='season')return '';
   const v=S.viewers[vname];
   if(!v)return '';
@@ -1789,8 +1834,8 @@ function requireAuth(tab, btn) {
 }
 
 function goTab(tab, btn) {
-  // Protect setup and live tabs
-  if ((tab === 'setup' || tab === 'live') && !checkStreamerAuth()) {
+  // Protect setup, live and squad tabs
+  if ((tab === 'setup' || tab === 'live' || tab === 'squad') && !checkStreamerAuth()) {
     tab = 'streamer';
     btn = document.getElementById('nb-streamer');
   }
@@ -1800,6 +1845,7 @@ function goTab(tab, btn) {
   btn.classList.add('active');
   if (tab === 'league') renderLeague();
   if (tab === 'streamer') renderStreamerTab();
+  if (tab === 'squad') renderSquadManage();
 }
 
 function renderStreamerTab() {
