@@ -133,8 +133,10 @@ function restoreUI(){
   // Restore season UI elements
   const seasonBadge=document.getElementById('season-badge');
   const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  const endResetBtn=document.getElementById('end-reset-btn');
   if(seasonBadge)seasonBadge.style.display=S.type==='season'?'inline-block':'none';
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=S.type==='season'?'inline-block':'none';
+  if(endResetBtn)endResetBtn.textContent=S.type==='season'?'End Season':'Reset session';
 }
 
 let pollInterval=null; // kept for fallback only
@@ -436,8 +438,10 @@ async function _goLive(type){
   // Show/hide season badge and settings button
   const seasonBadge=document.getElementById('season-badge');
   const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  const endResetBtn=document.getElementById('end-reset-btn');
   if(seasonBadge)seasonBadge.style.display=type==='season'?'inline-block':'none';
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=type==='season'?'inline-block':'none';
+  if(endResetBtn)endResetBtn.textContent=type==='season'?'End Season':'Reset session';
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
 }
 
@@ -1080,8 +1084,51 @@ function getViewerScore(vname){
   return total;
 }
 
+// ── Season mid-roster management ─────────────────────────────────────────────
+function showAddPlayerPanel(){
+  const existing=document.getElementById('season-add-player');
+  if(existing){existing.remove();return;}
+  const panel=document.createElement('div');
+  panel.id='season-add-player';
+  panel.style.cssText='background:var(--bg3);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:14px';
+  panel.innerHTML=`
+    <div style="font-size:13px;font-weight:600;color:var(--txt);margin-bottom:10px">Add player to season squad</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="new-player-name" class="input-field" placeholder="Player name" style="flex:2;margin-bottom:0">
+      <select id="new-player-pos" class="input-field" style="flex:1;margin-bottom:0">
+        <option value="DEF">DEF</option>
+        <option value="MID">MID</option>
+        <option value="ATT">ATT</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-accent" onclick="addSeasonPlayer()" style="font-size:12px">Add player</button>
+      <button class="btn" onclick="document.getElementById('season-add-player').remove()" style="font-size:12px">Cancel</button>
+    </div>`;
+  const scoringCard=document.querySelector('#scoring-collapse')?.parentElement;
+  if(scoringCard)scoringCard.parentElement.insertBefore(panel,scoringCard);
+}
+
+async function addSeasonPlayer(){
+  const name=sanitise(document.getElementById('new-player-name').value.trim(),60);
+  const pos=document.getElementById('new-player-pos').value;
+  if(!name){alert('Please enter a player name.');return;}
+  if(S.roster.find(p=>p.name.toLowerCase()===name.toLowerCase())){alert('Player already in squad.');return;}
+  S.roster.push({name,pos});
+  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  document.getElementById('season-add-player')?.remove();
+  renderScoring();
+}
+
 function renderScoring(){
   const panel=document.getElementById('scoring-panel');panel.innerHTML='';
+  // Season mode: add player button at top
+  if(S.type==='season'&&S.sessionCode){
+    const addBtn=document.createElement('div');
+    addBtn.style.cssText='grid-column:1/-1;margin-bottom:4px';
+    addBtn.innerHTML=`<button class="btn" onclick="showAddPlayerPanel()" style="font-size:12px;border-color:var(--accent);color:var(--accent)">+ Add player to squad</button>`;
+    panel.appendChild(addBtn);
+  }
   const cols=window.innerWidth>=600?3:window.innerWidth>=400?2:1;
   panel.style.cssText='display:grid;grid-template-columns:repeat('+cols+',minmax(0,1fr));gap:14px;';
   const byPos={DEF:[],MID:[],ATT:[]};
@@ -1291,7 +1338,9 @@ async function joinGame(){
   const code=sanitise(document.getElementById('vcode').value.trim().toUpperCase(),12);
   if(!code){err.style.display='block';err.textContent=t('err_code');return;}
   const session=await db('get_session',{session_id:code});
-  if(!session||!session.is_live){
+  // For seasons, allow joining even when not live (viewers use same code between streams)
+  const sessionValid = session && (session.is_live || session.type === 'season');
+  if(!sessionValid){
     _joinAttempts++;
     if(_joinAttempts>=5){_joinBlock=Date.now()+60000;_joinAttempts=0;}
     err.style.display='block';err.textContent=t('err_not_found');return;
@@ -1605,16 +1654,8 @@ function renderLeague(){
 
 async function handleEndOrReset(){
   if(S.type==='season'){
-    if(!confirm('End this stream? Points are saved and your season stays open for the next stream.'))return;
-    await db('end_stream',{session_id:S.sessionCode});
-    S.isLive=false;
-    // Keep everything else — viewers rejoin next stream with same code
-    save();
-    // Update UI to reflect stream ended but season still active
-    document.getElementById('live-pill').style.display='none';
-    document.getElementById('sp-done').style.display='block';
-    const endBtn=document.getElementById('end-reset-btn');
-    if(endBtn)endBtn.textContent='▶ Start Next Stream';
+    if(!confirm('End this season? This will clear all scores, picks and viewers permanently.'))return;
+    await resetAll();
   } else {
     await resetAll();
   }
