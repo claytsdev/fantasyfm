@@ -1,3 +1,30 @@
+// ── Ably helpers ─────────────────────────────────────────────────────────────
+async function ablyPublish(sessionCode, eventName, data) {
+  const key = process.env.ABLY_API_KEY;
+  if (!key) return;
+  try {
+    await fetch(`https://rest.ably.io/channels/${encodeURIComponent('ffm-'+sessionCode)}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + Buffer.from(key).toString('base64') },
+      body: JSON.stringify({ name: eventName, data })
+    });
+  } catch (e) { console.error('Ably publish failed:', e.message); }
+}
+
+async function ablyToken(payload) {
+  const key = process.env.ABLY_API_KEY;
+  if (!key) return { statusCode: 500, body: JSON.stringify({ error: 'Ably not configured' }) };
+  const sessionId = payload && payload.session_id ? payload.session_id : '*';
+  const capability = JSON.stringify({ ['ffm-'+sessionId]: ['subscribe'] });
+  const r = await fetch(`https://rest.ably.io/keys/${key.split(':')[0]}/requestToken`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + Buffer.from(key).toString('base64') },
+    body: JSON.stringify({ capability, ttl: 3600000 })
+  });
+  const token = await r.json();
+  return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(token) };
+}
+
 exports.handler = async function(event) {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' };
@@ -7,6 +34,7 @@ exports.handler = async function(event) {
     const body = JSON.parse(event.body);
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
+    if (body.action === 'ably_token') return await ablyToken(body.payload);
     if (body.action === 'create_checkout') return await createCheckout(body.payload);
     if (body.action === 'get_streamers') return await getStreamers();
     if (body.action === 'add_streamer') return await addStreamer(body.payload);
@@ -321,6 +349,7 @@ async function handleSupabase(body) {
         const r = await fetch(`${base}/roster`, { method: 'POST', headers, body: JSON.stringify(payload.players.map(p => ({ session_id: payload.session_id, name: p.name, pos: p.pos }))) });
         result = await r.json();
       } else result = [];
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'roster' });
     }
     else if (action === 'get_roster') {
       const r = await fetch(`${base}/roster?session_id=eq.${payload.session_id}&select=name,pos`, { headers });
@@ -333,13 +362,6 @@ async function handleSupabase(body) {
       const session = sessions[0];
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { headers });
       const existing = await r.json();
-<<<<<<< Updated upstream
-      if (existing.length > 0) {
-        const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0 }) });
-        result = await upd.json();
-      } else {
-        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
-=======
       if (session && session.type === 'season' && !session.allow_new_joiners && existing.length === 0) {
         result = { error: 'This season is not accepting new players' };
       } else if (existing.length > 0) {
@@ -347,9 +369,9 @@ async function handleSupabase(body) {
         result = await upd.json();
       } else {
         const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0, transfers_used: 0 }) });
->>>>>>> Stashed changes
         result = await ins.json();
       }
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer' });
     }
     else if (action === 'get_viewers') {
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used`, { headers });
@@ -367,6 +389,7 @@ async function handleSupabase(body) {
       const safeName = String(payload.player_name).replace(/[<>"'`]/g,'').slice(0,60);
       const r = await fetch(`${base}/events`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, player_name: safeName, pos: payload.pos, event_type: payload.event_type, points: pts }) });
       result = await r.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'event' });
     }
     else if (action === 'delete_last_event') {
       const r = await fetch(`${base}/events?session_id=eq.${payload.session_id}&order=id.desc&limit=1`, { headers });
@@ -374,6 +397,7 @@ async function handleSupabase(body) {
       if (events.length > 0) {
         await fetch(`${base}/events?id=eq.${events[0].id}`, { method: 'DELETE', headers });
         result = events[0];
+        await ablyPublish(payload.session_id, 'state_changed', { type: 'event_deleted' });
       } else result = null;
     }
     else if (action === 'get_events') {
@@ -452,6 +476,7 @@ async function handleSupabase(body) {
       await fetch(`${base}/viewers?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
       await fetch(`${base}/roster?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
       await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'DELETE', headers });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'reset' });
       result = { ok: true };
     }
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) };
