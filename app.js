@@ -1858,6 +1858,7 @@ function renderStreamerTab() {
       loadStreamers();
     }
     loadTwitchChannel();
+    updateSquadTab();
   } else {
     document.getElementById('str-login').style.display = 'block';
     document.getElementById('str-dash').style.display = 'none';
