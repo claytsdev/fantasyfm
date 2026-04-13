@@ -304,9 +304,14 @@ async function handleSupabase(body) {
       const sessionHeaders = payload.user_jwt
         ? { 'Content-Type': 'application/json', 'apikey': process.env.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${payload.user_jwt}`, 'Prefer': 'return=representation' }
         : headers;
-      const body = { id: payload.id, is_live: true };
+      const body = { id: payload.id, is_live: true, type: payload.type || 'oneoff' };
       // Only pass user_id explicitly if no JWT (fallback to service role path)
       if (!payload.user_jwt && payload.user_id) body.user_id = payload.user_id;
+      if (payload.type === 'season') {
+        body.season_end = payload.season_end || null;
+        body.allow_new_joiners = payload.allow_new_joiners !== undefined ? payload.allow_new_joiners : true;
+        body.transfers_per_viewer = payload.transfers_per_viewer || 3;
+      }
       const r = await fetch(`${base}/sessions`, { method: 'POST', headers: sessionHeaders, body: JSON.stringify(body) });
       result = await r.json();
     }
@@ -322,18 +327,32 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'upsert_viewer') {
+      // For season mode: check if new joiners are allowed
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,allow_new_joiners`, { headers });
+      const sessions = await sessionR.json();
+      const session = sessions[0];
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { headers });
       const existing = await r.json();
+<<<<<<< Updated upstream
       if (existing.length > 0) {
         const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0 }) });
         result = await upd.json();
       } else {
         const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
+=======
+      if (session && session.type === 'season' && !session.allow_new_joiners && existing.length === 0) {
+        result = { error: 'This season is not accepting new players' };
+      } else if (existing.length > 0) {
+        const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null }) });
+        result = await upd.json();
+      } else {
+        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0, transfers_used: 0 }) });
+>>>>>>> Stashed changes
         result = await ins.json();
       }
     }
     else if (action === 'get_viewers') {
-      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock`, { headers });
+      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used`, { headers });
       result = await r.json();
     }
     else if (action === 'add_event') {
@@ -362,7 +381,7 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'get_session') {
-      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live`, { headers });
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer`, { headers });
       const sessions = await r.json();
       result = sessions[0] || null;
     }
@@ -395,6 +414,38 @@ async function handleSupabase(body) {
     else if (action === 'resolve_bug') {
       await fetch(`${base}/bug_reports?id=eq.${payload.id}`, { method: 'PATCH', headers, body: JSON.stringify({ resolved: payload.resolved }) });
       result = { ok: true };
+    }
+    else if (action === 'update_season_settings') {
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ season_end: payload.season_end, allow_new_joiners: payload.allow_new_joiners, transfers_per_viewer: payload.transfers_per_viewer }) });
+      result = await r.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'season_settings' });
+    }
+    else if (action === 'end_stream') {
+      // End a single stream within a season — sets is_live false but keeps all data
+      await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_live: false }) });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'stream_ended' });
+      result = { ok: true };
+    }
+    else if (action === 'use_transfer') {
+      // Validate pos
+      const allowedPos = ['pick_def', 'pick_mid', 'pick_att', 'pick_cap'];
+      if (!allowedPos.includes(payload.pos)) throw new Error('Invalid pos');
+      const safeName = String(payload.new_player).replace(/[<>"'`]/g, '').slice(0, 60);
+      // Fetch session
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,transfers_per_viewer`, { headers });
+      const sessions = await sessionR.json();
+      const session = sessions[0];
+      if (!session || session.type !== 'season') throw new Error('Transfers only available in season mode');
+      // Fetch viewer
+      const viewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=transfers_used`, { headers });
+      const viewers = await viewerR.json();
+      const viewer = viewers[0];
+      if (!viewer) throw new Error('Viewer not found');
+      if (viewer.transfers_used >= session.transfers_per_viewer) throw new Error('No transfers remaining');
+      // Apply
+      const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
+      result = await upd.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer' });
     }
     else if (action === 'reset_session') {
       await fetch(`${base}/events?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
