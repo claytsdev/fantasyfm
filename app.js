@@ -122,9 +122,6 @@ function restoreUI(){
   document.getElementById('live-pill').style.display='inline-block';
   document.getElementById('live-locked').style.display='none';
   document.getElementById('live-panel').style.display='block';
-  // Hide language selector once live — language shouldn't change mid-session
-  const langCard = document.querySelector('.lang-selector-card');
-  if(langCard) langCard.style.display='none';
   document.getElementById('lg-empty').style.display='none';
   document.getElementById('lg-panel').style.display='block';
   renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
@@ -143,6 +140,8 @@ function restoreUI(){
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=S.type==='season'?'inline-block':'none';
   if(endResetBtn)endResetBtn.textContent=S.type==='season'?'End Season':'Reset session';
   updateSquadTab();
+  updateSetupTabLabel();
+  renderSquadManage();
 }
 
 let pollInterval=null; // kept for fallback only
@@ -449,6 +448,7 @@ async function _goLive(type){
   if(seasonSettingsBtn)seasonSettingsBtn.style.display=type==='season'?'inline-block':'none';
   if(endResetBtn)endResetBtn.textContent=type==='season'?'End Season':'Reset session';
   updateSquadTab();
+  updateSetupTabLabel();
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
 }
 
@@ -1759,8 +1759,8 @@ async function squadRemovePlayer(name){
 }
 
 function updateSquadTab(){
-  const btn=document.getElementById('nb-squad');
-  if(btn)btn.style.display=S.type==='season'&&checkStreamerAuth()?'inline-block':'none';
+  const card=document.getElementById('squad-mgmt-card');
+  if(card)card.style.display=S.type==='season'&&checkStreamerAuth()?'block':'none';
 }
 
 // ── Transfer UI (viewer side) ────────────────────────────────────────────────
@@ -1829,10 +1829,9 @@ function setUIMode(mode) {
   uiMode = mode;
   try { localStorage.setItem('ffm_ui_mode', mode); } catch(e) {}
   const tabs = {
-    'nb-home':     { viewer: false, streamer: false },
+    'nb-home':     { viewer: true,  streamer: true  },
     'nb-setup':    { viewer: false, streamer: true  },
     'nb-live':     { viewer: false, streamer: true  },
-    'nb-squad':    { viewer: false, streamer: true  }, // further filtered by season in updateSquadTab
     'nb-viewer':   { viewer: true,  streamer: false },
     'nb-league':   { viewer: true,  streamer: true  },
     'nb-streamer': { viewer: false, streamer: true  },
@@ -1840,12 +1839,10 @@ function setUIMode(mode) {
   Object.entries(tabs).forEach(([id, vis]) => {
     const el = document.getElementById(id);
     if (!el) return;
-    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : false;
+    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : id === 'nb-home';
     el.style.display = show ? '' : 'none';
   });
-  // Squad tab needs extra season check
-  if (mode === 'streamer') updateSquadTab();
-  // Update switch link text in home/topbar
+  // Update switch link
   const switchEl = document.getElementById('mode-switch-link');
   if (switchEl) {
     if (mode === 'viewer') {
@@ -1862,11 +1859,12 @@ function setUIMode(mode) {
 function clearUIMode() {
   uiMode = null;
   try { localStorage.removeItem('ffm_ui_mode'); } catch(e) {}
-  // Show only home tab
-  ['nb-home','nb-setup','nb-live','nb-squad','nb-viewer','nb-league','nb-streamer'].forEach(id => {
+  ['nb-setup','nb-live','nb-viewer','nb-league','nb-streamer'].forEach(id => {
     const el = document.getElementById(id);
-    if (el) el.style.display = id === 'nb-home' ? '' : 'none';
+    if (el) el.style.display = 'none';
   });
+  const switchEl = document.getElementById('mode-switch-link');
+  if (switchEl) switchEl.style.display = 'none';
 }
 
 function checkStreamerAuth() {
@@ -1883,21 +1881,49 @@ function requireAuth(tab, btn) {
 }
 
 function goTab(tab, btn) {
-  // Protect setup, live and squad tabs
-  if ((tab === 'setup' || tab === 'live' || tab === 'squad') && !checkStreamerAuth()) {
+  // Protect setup and live tabs
+  if ((tab === 'setup' || tab === 'live') && !checkStreamerAuth()) {
     tab = 'streamer';
     btn = document.getElementById('nb-streamer');
   }
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('sec-' + tab).classList.add('active');
-  btn.classList.add('active');
+  if(btn) btn.classList.add('active');
   if (tab === 'league') renderLeague();
   if (tab === 'streamer') renderStreamerTab();
-  if (tab === 'squad') renderSquadManage();
+  if (tab === 'live') { updateSquadTab(); renderSquadManage(); }
+  updateSetupTabLabel();
 }
 
-function renderStreamerTab() {
+function updateSetupTabLabel(){
+  const btn=document.getElementById('nb-setup');
+  if(!btn)return;
+  if(S.isLive&&S.type==='season') btn.textContent='Season Settings';
+  else if(S.isLive) btn.textContent='Session Settings';
+  else btn.textContent='Setup';
+}
+
+function formatDateDisplay(isoString){
+  if(!isoString)return'';
+  const d=new Date(isoString);
+  return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function updateDateDisplay(inputId, displayId){
+  const input=document.getElementById(inputId);
+  const display=document.getElementById(displayId);
+  if(!input||!display)return;
+  input.addEventListener('change',()=>{
+    display.textContent=input.value?'✓ '+formatDateDisplay(new Date(input.value).toISOString()):'';
+  });
+}
+
+// Initialise date displays
+document.addEventListener('DOMContentLoaded',()=>{
+  updateDateDisplay('season-end-input','season-end-display');
+  updateDateDisplay('edit-season-end','edit-season-end-display');
+});
   if (checkStreamerAuth()) {
     document.getElementById('str-login').style.display = 'none';
     document.getElementById('str-dash').style.display = 'block';
