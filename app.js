@@ -1924,6 +1924,8 @@ document.addEventListener('DOMContentLoaded',()=>{
   updateDateDisplay('season-end-input','season-end-display');
   updateDateDisplay('edit-season-end','edit-season-end-display');
 });
+
+function renderStreamerTab() {
   if (checkStreamerAuth()) {
     document.getElementById('str-login').style.display = 'none';
     document.getElementById('str-dash').style.display = 'block';
