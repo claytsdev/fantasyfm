@@ -25,12 +25,12 @@
 <div class="nav" style="display:flex;align-items:stretch">
   <div style="display:flex;flex:1">
     <button class="nav-btn active" id="nb-home" onclick="goTab('home',this)" data-i18n="home">Home</button>
-    <button class="nav-btn" id="nb-setup" onclick="goTab('setup',this)" data-i18n="setup">Setup</button>
-    <button class="nav-btn" id="nb-live" onclick="goTab('live',this)" data-i18n="controls">Controls</button>
+    <button class="nav-btn" id="nb-setup" onclick="goTab('setup',this)" data-i18n="setup" style="display:none">Setup</button>
+    <button class="nav-btn" id="nb-live" onclick="goTab('live',this)" data-i18n="controls" style="display:none">Controls</button>
     <button class="nav-btn" id="nb-squad" onclick="goTab('squad',this)" style="display:none">Squad</button>
-    <button class="nav-btn" id="nb-viewer" onclick="goTab('viewer',this)" data-i18n="viewer">Viewer</button>
-    <button class="nav-btn" id="nb-league" onclick="goTab('league',this)" data-i18n="table">Table</button>
-    <button class="nav-btn" id="nb-streamer" onclick="goTab('streamer',this)" style="color:var(--accent)" data-i18n="streamer">Streamer</button>
+    <button class="nav-btn" id="nb-viewer" onclick="goTab('viewer',this)" data-i18n="viewer" style="display:none">Viewer</button>
+    <button class="nav-btn" id="nb-league" onclick="goTab('league',this)" data-i18n="table" style="display:none">Table</button>
+    <button class="nav-btn" id="nb-streamer" onclick="goTab('streamer',this)" style="display:none" data-i18n="streamer">Streamer</button>
   </div>
   <div style="display:flex;align-items:center;gap:4px;padding:0 12px;border-left:1px solid var(--border)">
     <button class="lang-btn" data-lang="en" onclick="setLang('en')" title="English" style="font-family:var(--font-ui);font-size:10px;font-weight:700;padding:4px 8px;border-radius:3px;border:1px solid var(--accent);background:transparent;color:var(--txt);cursor:pointer;display:flex;align-items:center;gap:4px">
@@ -124,9 +124,20 @@
       </div>
     </div>
 
-    <div style="text-align:center;padding:16px 0">
-      <button class="btn btn-accent" onclick="goTab('setup',document.getElementById('nb-setup'))" style="margin-right:8px">Streamer setup &#x2192;</button>
-      <button class="btn" onclick="goTab('viewer',document.getElementById('nb-viewer'))">Join as viewer &#x2192;</button>
+    <div style="text-align:center;padding:16px 0 8px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:440px;margin:0 auto 12px">
+        <button onclick="setUIMode('streamer');goTab('streamer',document.getElementById('nb-streamer'))" style="background:var(--bg3);border:2px solid var(--border);border-radius:var(--r2);padding:20px 16px;cursor:pointer;text-align:left;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+          <div style="font-size:22px;margin-bottom:8px">🎮</div>
+          <div style="font-family:var(--font-ui);font-size:13px;font-weight:700;color:var(--txt);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">I'm a Streamer</div>
+          <div style="font-size:12px;color:var(--txt3);line-height:1.5">Set up and run a session</div>
+        </button>
+        <button onclick="setUIMode('viewer');goTab('viewer',document.getElementById('nb-viewer'))" style="background:var(--bg3);border:2px solid var(--border);border-radius:var(--r2);padding:20px 16px;cursor:pointer;text-align:left;transition:border-color 0.15s" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+          <div style="font-size:22px;margin-bottom:8px">👥</div>
+          <div style="font-family:var(--font-ui);font-size:13px;font-weight:700;color:var(--txt);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">I'm a Viewer</div>
+          <div style="font-size:12px;color:var(--txt3);line-height:1.5">Join a game with a session code</div>
+        </button>
+      </div>
+      <a id="mode-switch-link" style="display:none;font-size:12px;color:var(--txt3);cursor:pointer;text-decoration:underline"></a>
     </div>
   </div>
 

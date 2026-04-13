@@ -134,6 +134,7 @@ function restoreUI(){
   if(checkStreamerAuth()){
     document.getElementById('nb-streamer').style.color='var(--accent)';
   }
+  setUIMode('streamer');
   // Restore season UI elements
   const seasonBadge=document.getElementById('season-badge');
   const seasonSettingsBtn=document.getElementById('season-settings-btn');
@@ -1262,6 +1263,8 @@ function clearOAuth() {
   if (btnsEl) btnsEl.style.display = 'block';
   if (manualSection) manualSection.style.display = 'block';
   if (joinBtn) { joinBtn.disabled = false; joinBtn.style.opacity = '1'; joinBtn.style.cursor = 'pointer'; joinBtn.textContent = 'Join →'; }
+  clearUIMode();
+  goTab('home', document.getElementById('nb-home'));
 }
 
 function checkOAuthReturn() {
@@ -1380,6 +1383,7 @@ async function joinGame(){
     }
   }catch(e){}
   if(S.viewers[name].locked)showDash(name);else showPicker(name);
+  setUIMode('viewer');
   save();
   startPolling();
 }
@@ -1819,6 +1823,51 @@ async function submitTransfers(vname){
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 let streamerAuthed = false;
+let uiMode = localStorage.getItem('ffm_ui_mode') || null; // null | 'viewer' | 'streamer'
+
+function setUIMode(mode) {
+  uiMode = mode;
+  try { localStorage.setItem('ffm_ui_mode', mode); } catch(e) {}
+  const tabs = {
+    'nb-home':     { viewer: false, streamer: false },
+    'nb-setup':    { viewer: false, streamer: true  },
+    'nb-live':     { viewer: false, streamer: true  },
+    'nb-squad':    { viewer: false, streamer: true  }, // further filtered by season in updateSquadTab
+    'nb-viewer':   { viewer: true,  streamer: false },
+    'nb-league':   { viewer: true,  streamer: true  },
+    'nb-streamer': { viewer: false, streamer: true  },
+  };
+  Object.entries(tabs).forEach(([id, vis]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : false;
+    el.style.display = show ? '' : 'none';
+  });
+  // Squad tab needs extra season check
+  if (mode === 'streamer') updateSquadTab();
+  // Update switch link text in home/topbar
+  const switchEl = document.getElementById('mode-switch-link');
+  if (switchEl) {
+    if (mode === 'viewer') {
+      switchEl.innerHTML = 'Switch to streamer view';
+      switchEl.onclick = () => { setUIMode('streamer'); goTab('streamer', document.getElementById('nb-streamer')); };
+    } else if (mode === 'streamer') {
+      switchEl.innerHTML = 'Switch to viewer';
+      switchEl.onclick = () => { setUIMode('viewer'); goTab('viewer', document.getElementById('nb-viewer')); };
+    }
+    switchEl.style.display = mode ? 'inline' : 'none';
+  }
+}
+
+function clearUIMode() {
+  uiMode = null;
+  try { localStorage.removeItem('ffm_ui_mode'); } catch(e) {}
+  // Show only home tab
+  ['nb-home','nb-setup','nb-live','nb-squad','nb-viewer','nb-league','nb-streamer'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = id === 'nb-home' ? '' : 'none';
+  });
+}
 
 function checkStreamerAuth() {
   return streamerAuthed === true && localStorage.getItem('ffm_streamer_authed') === 'true';
@@ -1897,6 +1946,7 @@ async function streamerLogin() {
       streamerAuthed = true;
       btn.textContent = 'Sign in →';
       btn.disabled = false;
+      setUIMode('streamer');
       renderStreamerTab();
     }
   } catch(e) {
@@ -1914,6 +1964,8 @@ function streamerLogout() {
   localStorage.removeItem('ffm_streamer_jwt');
   localStorage.removeItem('ffm_streamer_uid');
   streamerAuthed = false;
+  clearUIMode();
+  goTab('home', document.getElementById('nb-home'));
   renderStreamerTab();
 }
 
@@ -2472,10 +2524,17 @@ function closeModal(){
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 
 
+// Restore streamer auth state from localStorage
+if(localStorage.getItem('ffm_streamer_authed')==='true') streamerAuthed=true;
+
 load().then(() => {
   checkOAuthReturn();
   // Auto-rejoin viewer session if we have stored picks and a code
   autoRejoinViewer();
+  // Restore UI mode
+  const savedMode = localStorage.getItem('ffm_ui_mode');
+  if(savedMode) setUIMode(savedMode);
+  else clearUIMode();
 });
 checkCheckoutReturn();
 renderRefMatchStatus();
