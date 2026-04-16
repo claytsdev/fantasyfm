@@ -1261,6 +1261,42 @@ function renderOAuthUser() {
   if (platEl) platEl.textContent = oauthUser.platform === 'twitch' ? 'Twitch' : 'YouTube';
   if (avatarEl && oauthUser.avatar) { avatarEl.src = oauthUser.avatar; avatarEl.style.display = 'block'; }
   if (joinBtn) { joinBtn.disabled = false; joinBtn.style.opacity = '1'; joinBtn.style.cursor = 'pointer'; joinBtn.textContent = 'Join →'; }
+  // Show "change session" link if they have a previously saved session
+  const changeRow = document.getElementById('change-session-row');
+  if (changeRow) {
+    const hasSavedCode = !!localStorage.getItem('ffm_last_viewer_code');
+    changeRow.style.display = hasSavedCode ? 'block' : 'none';
+  }
+}
+
+function viewerChangeSession() {
+  // Clear saved session code so viewer can enter a new one
+  try {
+    localStorage.removeItem('ffm_last_viewer_code');
+    localStorage.removeItem('ffm_state');
+  } catch(e) {}
+  // Reset session state but keep OAuth identity
+  S.sessionCode = null;
+  S.isLive = false;
+  S.roster = [];
+  S.events = [];
+  S.viewers = {};
+  stopAbly();
+  // Hide picker/dash, show join form
+  const joinDiv = document.getElementById('vp-join');
+  const pickerDiv = document.getElementById('vp-picker');
+  const dashDiv = document.getElementById('vp-dash');
+  if (joinDiv) joinDiv.style.display = 'block';
+  if (pickerDiv) { pickerDiv.style.display = 'none'; pickerDiv.innerHTML = ''; }
+  if (dashDiv) { dashDiv.style.display = 'none'; dashDiv.innerHTML = ''; }
+  // Clear and focus the session code input
+  const vcodeEl = document.getElementById('vcode');
+  if (vcodeEl) { vcodeEl.value = ''; vcodeEl.focus(); }
+  // Hide error
+  const err = document.getElementById('vjoin-err');
+  if (err) err.style.display = 'none';
+  setUIMode('viewer');
+  goTab('viewer', document.getElementById('nb-viewer'));
 }
 
 function clearOAuth() {
@@ -1892,6 +1928,126 @@ async function adminEndSession(sessionId) {
   renderAdminTab();
 }
 
+async function adminInspectSession(sessionId) {
+  const modal = document.getElementById('inspect-modal');
+  const content = document.getElementById('inspect-content');
+  if (!modal || !content) return;
+  content.innerHTML = '<div style="font-size:13px;color:var(--txt3)">Loading...</div>';
+  modal.style.display = 'flex';
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  const data = await db('admin_inspect_session', { session_id: sessionId, user_jwt: jwt });
+  if (!data || data.error) {
+    content.innerHTML = `<div style="font-size:13px;color:var(--att)">${data?.error || 'Failed to load.'}</div>`;
+    return;
+  }
+  const { session, streamer_email, streamer_channel, roster, events, viewers } = data;
+  const created = new Date(session.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const liveBadge = session.is_live
+    ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0a200a;color:#4aff91;font-family:var(--font-ui);font-weight:700;border:1px solid #4aff9155">LIVE</span>'
+    : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700">ENDED</span>';
+  const typeBadge = session.type === 'season'
+    ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55;margin-left:4px">SEASON</span>'
+    : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700;margin-left:4px">ONE-OFF</span>';
+  const channelDisplay = streamer_channel
+    ? `<span style="color:var(--accent);font-weight:600">${streamer_channel}</span> <span style="color:var(--txt3)">(${streamer_email})</span>`
+    : `<span style="color:var(--txt2)">${streamer_email}</span>`;
+
+  // Compute scores inline (same logic as getScore)
+  const SC_local = {DEF:{goal:3,assist:3,clean_sheet:5},MID:{goal:3,assist:5,clean_sheet:3},ATT:{goal:5,assist:3,clean_sheet:1}};
+  const evtPts = {};
+  events.forEach(e => {
+    evtPts[e.player_name] = (evtPts[e.player_name] || 0) + Number(e.points);
+  });
+
+  // Leaderboard
+  const lb = viewers
+    .filter(v => v.locked)
+    .map(v => {
+      const base_pts = evtPts[v.pick_def] || 0;
+      const picks = [v.pick_def, v.pick_mid, v.pick_att];
+      let pts = picks.reduce((sum, p) => sum + (evtPts[p] || 0), 0);
+      if (v.pick_cap) pts += (evtPts[v.pick_cap] || 0); // cap 2x = +1x on top
+      return { name: v.viewer_name, pts, picks, cap: v.pick_cap, platform: v.platform, isMod: v.is_mod };
+    })
+    .sort((a, b) => b.pts - a.pts);
+
+  // By-position roster
+  const byPos = { DEF: [], MID: [], ATT: [] };
+  roster.forEach(p => { if (byPos[p.pos]) byPos[p.pos].push(p); });
+
+  const posColours = { DEF: '#4a9eff', MID: '#f5a623', ATT: '#ff5a5a' };
+
+  content.innerHTML = `
+    <!-- Header -->
+    <div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:16px;font-weight:700;color:var(--txt);margin-bottom:4px">${session.id} ${liveBadge}${typeBadge}</div>
+      <div style="font-size:13px;margin-bottom:2px">${channelDisplay}</div>
+      <div style="font-size:11px;color:var(--txt3)">${created} · ${viewers.length} viewer${viewers.length!==1?'s':''} · ${events.length} event${events.length!==1?'s':''}</div>
+      ${session.type==='season' && session.season_end ? `<div style="font-size:11px;color:#c084fc;margin-top:2px">Season ends ${new Date(session.season_end).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</div>` : ''}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+      <!-- LEFT: Squad + Events -->
+      <div>
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-bottom:8px">Squad (${roster.length})</div>
+        ${['DEF','MID','ATT'].map(pos => {
+          const players = byPos[pos];
+          if (!players.length) return '';
+          return `<div style="margin-bottom:10px">
+            <div style="font-size:10px;font-weight:700;color:${posColours[pos]};font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${pos}</div>
+            ${players.map(p => {
+              const pts = evtPts[p.name] || 0;
+              return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)22">
+                <span style="color:var(--txt)">${p.name}</span>
+                ${pts ? `<span style="color:var(--accent);font-weight:700;font-family:var(--font-ui)">+${pts}</span>` : '<span style="color:var(--txt3)">0</span>'}
+              </div>`;
+            }).join('')}
+          </div>`;
+        }).join('')}
+
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-top:16px;margin-bottom:8px">Events (${events.length})</div>
+        ${events.length ? [...events].reverse().slice(0,15).map(e =>
+          `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)22;color:var(--txt2)">
+            <span style="color:${posColours[e.pos]||'var(--txt3)'};font-weight:600">${e.player_name}</span>
+            <span style="color:var(--txt3)"> · ${e.event_type.replace(/_/g,' ')}</span>
+            <span style="color:var(--accent);font-weight:700;float:right">${Number(e.points)>0?'+':''}${e.points}</span>
+          </div>`
+        ).join('') + (events.length > 15 ? `<div style="font-size:11px;color:var(--txt3);margin-top:4px">+${events.length-15} more events</div>` : '')
+        : '<div style="font-size:12px;color:var(--txt3)">No events yet.</div>'}
+      </div>
+
+      <!-- RIGHT: Leaderboard -->
+      <div>
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-bottom:8px">Managers (${viewers.length})</div>
+        ${viewers.length ? viewers.map(v => {
+          const isLocked = v.locked;
+          const platBadge = v.platform === 'twitch'
+            ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#9146ff22;color:#9146ff;font-family:var(--font-ui);font-weight:700;margin-left:3px">TW</span>'
+            : v.platform === 'youtube'
+              ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#ff000022;color:#ff0000;font-family:var(--font-ui);font-weight:700;margin-left:3px">YT</span>'
+              : '';
+          const modBadge = v.is_mod ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#1a1f2e;color:#f5a623;font-family:var(--font-ui);font-weight:700;margin-left:3px;border:1px solid #f5a62355">MOD</span>' : '';
+          const lockIcon = isLocked ? '🔒' : '⏳';
+          const picks = [v.pick_def,v.pick_mid,v.pick_att].filter(Boolean).join(' · ') || '—';
+          const capStr = v.pick_cap ? ` · ★${v.pick_cap}` : '';
+          // Simple pts: sum of picked players' event points (cap counts double via +1x)
+          let pts = [v.pick_def, v.pick_mid, v.pick_att, v.pick_cap].filter(Boolean)
+            .reduce((sum, p) => sum + (evtPts[p] || 0), 0);
+          return `<div style="padding:7px 0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+              <div style="font-size:12px;font-weight:600;color:var(--txt)">${lockIcon} ${v.viewer_name}${platBadge}${modBadge}</div>
+              ${isLocked ? `<div style="font-family:var(--font-ui);font-size:13px;font-weight:700;color:var(--accent)">${pts}pts</div>` : '<div style="font-size:11px;color:var(--txt3)">not locked</div>'}
+            </div>
+            <div style="font-size:11px;color:var(--txt3)">${picks}${capStr}</div>
+          </div>`;
+        }).join('')
+        : '<div style="font-size:12px;color:var(--txt3)">No viewers yet.</div>'}
+      </div>
+
+    </div>`;
+}
+
 async function renderAdminTab() {
   const el = document.getElementById('admin-sessions-list');
   if (!el) return;
@@ -1921,13 +2077,14 @@ async function renderAdminTab() {
     const endBtn = s.is_live
       ? `<button class="evt-btn" onclick="adminEndSession('${s.id}')" style="font-size:10px;color:var(--att);white-space:nowrap;flex-shrink:0">End session</button>`
       : '';
+    const inspectBtn = `<button class="evt-btn" onclick="adminInspectSession('${s.id}')" style="font-size:10px;color:var(--accent);white-space:nowrap;flex-shrink:0">Inspect</button>`;
     return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;color:var(--txt);font-weight:600;margin-bottom:3px">${s.id} ${liveBadge}${typeBadge}</div>
         <div style="font-size:12px;color:var(--txt2);font-family:monospace">${channelDisplay}</div>
         <div style="font-size:11px;color:var(--txt3);margin-top:2px">${created} &middot; ${s.viewer_count} viewer${s.viewer_count !== 1 ? 's' : ''}</div>
       </div>
-      ${endBtn}
+      <div style="display:flex;gap:4px;flex-shrink:0">${inspectBtn}${endBtn}</div>
     </div>`;
   };
   let html = '';
@@ -2559,6 +2716,15 @@ function enlargeMatchImg(){
   const lb=document.getElementById('match-lightbox');
   const lg=document.getElementById('match-img-large');
   if(lb&&lg){lg.src=src;lb.style.display='flex';}
+}
+
+function toggleAccessMgmt() {
+  const body = document.getElementById('access-mgmt-body');
+  const chevron = document.getElementById('access-mgmt-chevron');
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)';
 }
 
 function toggleScoring() {

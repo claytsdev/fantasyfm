@@ -539,6 +539,35 @@ async function handleSupabase(body) {
       }));
       result = enriched;
     }
+    else if (action === 'admin_inspect_session') {
+      // Admin only
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const adminCheck = await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}&select=access_type`, { headers });
+      const admins = await adminCheck.json();
+      if (!admins.length || admins[0].access_type !== 'admin') throw new Error('Admin access required');
+      const sessionId = payload.session_id;
+      const [sessionR, rosterR, eventsR, viewersR] = await Promise.all([
+        fetch(`${base}/sessions?id=eq.${sessionId}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,created_at,user_id`, { headers }),
+        fetch(`${base}/roster?session_id=eq.${sessionId}&select=name,pos&order=pos.asc`, { headers }),
+        fetch(`${base}/events?session_id=eq.${sessionId}&select=player_name,pos,event_type,points,created_at&order=id.asc`, { headers }),
+        fetch(`${base}/viewers?session_id=eq.${sessionId}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,is_mod,transfers_used`, { headers })
+      ]);
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      const session = sessions[0];
+      // Get streamer info
+      const streamerR = await fetch(`${base}/streamers?id=eq.${session.user_id}&select=email,channel_name`, { headers });
+      const streamers = await streamerR.json();
+      result = {
+        session,
+        streamer_email: streamers[0]?.email || 'Unknown',
+        streamer_channel: streamers[0]?.channel_name || '',
+        roster: await rosterR.json(),
+        events: await eventsR.json(),
+        viewers: await viewersR.json()
+      };
+    }
     else if (action === 'reset_session') {
       await fetch(`${base}/events?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
       await fetch(`${base}/viewers?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
