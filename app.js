@@ -1884,6 +1884,14 @@ function renderViewerList() {
 // ── Admin dashboard ──────────────────────────────────────────────────────────
 let adminRefreshInterval = null;
 
+async function adminEndSession(sessionId) {
+  if (!confirm(`Force-end session ${sessionId}? This sets it to not-live but keeps all data.`)) return;
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  const res = await db('end_stream', { session_id: sessionId, user_jwt: jwt });
+  if (res && res.error) { alert('Error: ' + res.error); return; }
+  renderAdminTab();
+}
+
 async function renderAdminTab() {
   const el = document.getElementById('admin-sessions-list');
   if (!el) return;
@@ -1904,14 +1912,22 @@ async function renderAdminTab() {
       ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0a200a;color:#4aff91;font-family:var(--font-ui);font-weight:700;border:1px solid #4aff9155">LIVE</span>'
       : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700">ENDED</span>';
     const typeBadge = s.type === 'season'
-      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55">SEASON</span>'
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55;margin-left:4px">SEASON</span>'
       : '';
-    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+    // Show channel name if set, otherwise fall back to email username
+    const channelDisplay = s.streamer_channel
+      ? `<span style="color:var(--accent);font-weight:600">${s.streamer_channel}</span> <span style="font-size:11px;color:var(--txt3)">(${s.streamer_email})</span>`
+      : (() => { const p = (s.streamer_email||'Unknown').split('@'); return p[0]+'<span style="color:var(--txt3)">@'+p[1]+'</span>'; })();
+    const endBtn = s.is_live
+      ? `<button class="evt-btn" onclick="adminEndSession('${s.id}')" style="font-size:10px;color:var(--att);white-space:nowrap;flex-shrink:0">End session</button>`
+      : '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
       <div style="flex:1;min-width:0">
-        <div style="font-size:13px;color:var(--txt);font-weight:600;margin-bottom:3px">${s.id} ${liveBadge} ${typeBadge}</div>
-        <div style="font-size:12px;color:var(--txt2)">${s.streamer_email}</div>
+        <div style="font-size:13px;color:var(--txt);font-weight:600;margin-bottom:3px">${s.id} ${liveBadge}${typeBadge}</div>
+        <div style="font-size:12px;color:var(--txt2);font-family:monospace">${channelDisplay}</div>
         <div style="font-size:11px;color:var(--txt3);margin-top:2px">${created} &middot; ${s.viewer_count} viewer${s.viewer_count !== 1 ? 's' : ''}</div>
       </div>
+      ${endBtn}
     </div>`;
   };
   let html = '';
@@ -1924,9 +1940,8 @@ async function renderAdminTab() {
     html += notLive.map(renderRow).join('');
   }
   el.innerHTML = html;
-  // Update last-refreshed time
   const ts = document.getElementById('admin-last-refresh');
-  if (ts) ts.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+  if (ts) ts.textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -2057,15 +2072,42 @@ document.addEventListener('DOMContentLoaded',()=>{
   updateDateDisplay('edit-season-end','edit-season-end-display');
 });
 
+async function saveChannelName() {
+  const input = document.getElementById('channel-name-input');
+  const status = document.getElementById('channel-name-status');
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!input || !jwt) return;
+  const val = input.value.trim();
+  if (!val) { if (status) { status.textContent = 'Please enter a channel name.'; status.style.color = 'var(--att)'; } return; }
+  if (status) { status.textContent = 'Saving...'; status.style.color = 'var(--txt3)'; }
+  const res = await db('update_channel_name', { channel_name: val, user_jwt: jwt });
+  if (res && res.ok) {
+    localStorage.setItem('ffm_channel_name', val);
+    if (status) { status.textContent = '✓ Saved'; status.style.color = '#4aff91'; }
+    // Hide the profile banner if it was showing
+    const banner = document.getElementById('profile-banner');
+    if (banner) banner.style.display = 'none';
+    setTimeout(() => { if (status) status.textContent = ''; }, 2500);
+  } else {
+    if (status) { status.textContent = 'Error saving. Try again.'; status.style.color = 'var(--att)'; }
+  }
+}
+
 function renderStreamerTab() {
   if (checkStreamerAuth()) {
     document.getElementById('str-login').style.display = 'none';
     document.getElementById('str-dash').style.display = 'block';
     const accessType = localStorage.getItem('ffm_access_type');
+    const channelName = localStorage.getItem('ffm_channel_name') || '';
+    // Populate channel name input
+    const cnInput = document.getElementById('channel-name-input');
+    if (cnInput) cnInput.value = channelName;
+    // Show/hide "complete your profile" banner
+    const banner = document.getElementById('profile-banner');
+    if (banner) banner.style.display = channelName ? 'none' : 'block';
     if (accessType === 'admin') {
       document.getElementById('admin-panel').style.display = 'block';
       loadStreamers();
-      // Show admin nav tab
       const adminTab = document.getElementById('nb-admin');
       if (adminTab) adminTab.style.display = '';
     }
@@ -2104,6 +2146,7 @@ async function streamerLogin() {
       localStorage.setItem('ffm_streamer_authed', 'true');
       localStorage.setItem('ffm_streamer_email', data.email);
       localStorage.setItem('ffm_access_type', data.access_type || 'beta');
+      localStorage.setItem('ffm_channel_name', data.channel_name || '');
       if(data.access_token) localStorage.setItem('ffm_streamer_jwt', data.access_token);
       if(data.user_id) localStorage.setItem('ffm_streamer_uid', data.user_id);
       streamerAuthed = true;
@@ -2124,6 +2167,7 @@ function streamerLogout() {
   localStorage.removeItem('ffm_streamer_authed');
   localStorage.removeItem('ffm_streamer_email');
   localStorage.removeItem('ffm_access_type');
+  localStorage.removeItem('ffm_channel_name');
   localStorage.removeItem('ffm_streamer_jwt');
   localStorage.removeItem('ffm_streamer_uid');
   streamerAuthed = false;

@@ -522,6 +522,15 @@
         </div>
         <button class="btn btn-danger" onclick="streamerLogout()" style="font-size:11px" data-i18n="sign_out">Sign out</button>
       </div>
+
+      <!-- Complete your profile banner -->
+      <div id="profile-banner" style="display:none;background:#1a1200;border:1px solid #f5a62355;border-radius:var(--r2);padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#f5a623;margin-bottom:2px">⚠ Complete your profile</div>
+          <div style="font-size:12px;color:var(--txt2)">Add your channel name so viewers and admins can identify your sessions.</div>
+        </div>
+        <button class="btn" onclick="document.getElementById('channel-name-input').focus();document.getElementById('channel-name-input').scrollIntoView({behavior:'smooth'})" style="font-size:11px;border-color:#f5a623;color:#f5a623;white-space:nowrap">Add channel name ↓</button>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
         <button class="btn btn-accent" onclick="goTab('setup',document.getElementById('nb-setup'))" style="justify-content:center;padding:14px">Setup session →</button>
         <button class="btn" onclick="goTab('live',document.getElementById('nb-live'))" style="justify-content:center;padding:14px">Live controls →</button>
@@ -566,6 +575,17 @@
           <div id="waitlist-list" style="display:none;margin-top:10px"></div>
           <div id="bugs-list" style="display:none;margin-top:10px"></div>
         </div>
+      </div>
+
+      <!-- Channel name -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">📺 Channel name</div>
+        <div style="font-size:12px;color:var(--txt2);margin-bottom:10px;line-height:1.5">Your Twitch or YouTube channel name. Used to identify your sessions in the admin dashboard.</div>
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <input class="input-field" id="channel-name-input" placeholder="e.g. clayts" style="margin-bottom:0;flex:1">
+          <button class="btn btn-success" onclick="saveChannelName()" style="font-size:11px;white-space:nowrap">Save</button>
+        </div>
+        <div id="channel-name-status" style="font-size:12px;min-height:16px"></div>
       </div>
 
       <div class="card">
@@ -648,6 +668,24 @@
   </div>
 
 
+  <!-- ADMIN DASHBOARD -->
+  <div class="section" id="sec-admin">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+      <div>
+        <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--att);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Admin</div>
+        <div style="font-family:var(--font-ui);font-size:22px;font-weight:700;color:var(--txt);text-transform:uppercase">Live Sessions</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span id="admin-last-refresh" style="font-size:11px;color:var(--txt3);font-family:var(--font-ui)"></span>
+        <button class="btn" onclick="renderAdminTab()" style="font-size:11px">Refresh</button>
+        <button class="btn btn-danger" onclick="streamerLogout()" style="font-size:11px">Sign out</button>
+      </div>
+    </div>
+    <div class="card">
+      <div id="admin-sessions-list"><div style="font-size:13px;color:var(--txt3)">Loading...</div></div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Footer -->
@@ -676,23 +714,6 @@
       <button onclick="openModal('pricing')" style="background:none;border:none;font-size:11px;color:#555b72;cursor:pointer;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;padding:0">Pricing</button>
       <button onclick="openModal('changelog')" style="background:none;border:none;font-size:11px;color:#555b72;cursor:pointer;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;padding:0">Changelog</button>
     </div>
-  </div>
-</div>
-
-<!-- ADMIN DASHBOARD -->
-<div class="section" id="sec-admin">
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
-    <div>
-      <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--att);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Admin</div>
-      <div style="font-family:var(--font-ui);font-size:22px;font-weight:700;color:var(--txt);text-transform:uppercase">Live Sessions</div>
-    </div>
-    <div style="display:flex;align-items:center;gap:10px">
-      <span id="admin-last-refresh" style="font-size:11px;color:var(--txt3);font-family:var(--font-ui)"></span>
-      <button class="btn" onclick="renderAdminTab()" style="font-size:11px">Refresh</button>
-    </div>
-  </div>
-  <div class="card">
-    <div id="admin-sessions-list"><div style="font-size:13px;color:var(--txt3)">Loading...</div></div>
   </div>
 </div>
 

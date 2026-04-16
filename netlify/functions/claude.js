@@ -82,7 +82,7 @@ async function handleLogin(payload) {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Invalid email or password' }) };
   }
 
-  const sr = await fetch(`${sbBase()}/streamers?email=eq.${encodeURIComponent(data.user.email)}&select=email,access_type,expires_at`, { headers: sbHeaders() });
+  const sr = await fetch(`${sbBase()}/streamers?email=eq.${encodeURIComponent(data.user.email)}&select=email,access_type,expires_at,channel_name`, { headers: sbHeaders() });
   const streamers = await sr.json();
 
   if (!streamers.length) {
@@ -94,7 +94,7 @@ async function handleLogin(payload) {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Your beta access has expired. Paid access is coming soon.' }) };
   }
 
-  return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, email: streamer.email, access_type: streamer.access_type, expires_at: streamer.expires_at, access_token: data.access_token, user_id: data.user.id }) };
+  return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, email: streamer.email, access_type: streamer.access_type, expires_at: streamer.expires_at, channel_name: streamer.channel_name || '', access_token: data.access_token, user_id: data.user.id }) };
 }
 
 async function createCheckout(payload) {
@@ -444,6 +444,16 @@ async function handleSupabase(body) {
       result = await r.json();
       await ablyPublish(payload.session_id, 'state_changed', { type: 'season_settings' });
     }
+    else if (action === 'update_channel_name') {
+      // Validate via JWT — streamer can only update their own channel name
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const safeName = String(payload.channel_name || '').replace(/[<>"'`]/g, '').trim().slice(0, 60);
+      await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ channel_name: safeName })
+      });
+      result = { ok: true, channel_name: safeName };
+    }
     else if (action === 'end_stream') {
       // End a single stream within a season — sets is_live false but keeps all data
       await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_live: false }) });
@@ -516,14 +526,15 @@ async function handleSupabase(body) {
       const enriched = await Promise.all(sessions.map(async (s) => {
         const [viewersR, streamerR] = await Promise.all([
           fetch(`${base}/viewers?session_id=eq.${s.id}&select=viewer_name`, { headers }),
-          fetch(`${base}/streamers?id=eq.${s.user_id}&select=email`, { headers })
+          fetch(`${base}/streamers?id=eq.${s.user_id}&select=email,channel_name`, { headers })
         ]);
         const viewers = await viewersR.json();
         const streamers = await streamerR.json();
         return {
           ...s,
           viewer_count: viewers.length,
-          streamer_email: streamers[0]?.email || 'Unknown'
+          streamer_email: streamers[0]?.email || 'Unknown',
+          streamer_channel: streamers[0]?.channel_name || ''
         };
       }));
       result = enriched;
