@@ -235,10 +235,14 @@
           </div>
           <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
             <div>
-              <div style="font-size:12px;font-weight:600;color:var(--txt)">🔒 New entries</div>
+              <div style="font-size:12px;font-weight:600;color:var(--txt)" id="entries-label">🟢 New entries: Open</div>
               <div style="font-size:10px;color:var(--txt3)" data-i18n="new_entries_hint">Lock to stop viewers joining mid-game</div>
             </div>
-            <button id="entries-toggle" onclick="toggleEntries()" style="font-family:var(--font-ui);font-size:13px;font-weight:700;padding:7px 18px;border-radius:4px;border:2px solid #4aff91;background:#0a2010;color:#4aff91;cursor:pointer;transition:all 0.15s;letter-spacing:0.5px">🟢 OPEN</button>
+            <!-- Toggle switch -->
+            <div onclick="toggleEntries()" id="entries-toggle" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;padding:6px 12px;border-radius:20px;border:1px solid #4aff91;background:#0a2010;transition:all 0.15s">
+              <div id="entries-toggle-knob" style="width:14px;height:14px;border-radius:50%;background:#4aff91;transition:all 0.2s;flex-shrink:0"></div>
+              <div id="entries-toggle-text" style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:#4aff91;letter-spacing:0.5px;white-space:nowrap">OPEN</div>
+            </div>
           </div>
         </div>
 
@@ -353,7 +357,7 @@
       <div class="card" style="margin-bottom:14px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <div>
-            <div class="card-title" style="margin-bottom:2px">👥 Viewers</div>
+            <div class="card-title" style="margin-bottom:2px">👥 Mod Access</div>
             <div style="font-size:12px;color:var(--txt3)">Promote a viewer to mod so they can help manage the session.</div>
           </div>
         </div>
@@ -874,7 +878,7 @@
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:28px;max-width:420px;width:100%">
     <div style="font-family:var(--font-ui);font-size:18px;font-weight:700;color:#c084fc;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:20px">🏆 New Season Setup</div>
     <div class="field-label" data-i18n="season_end_label">Season end date &amp; time</div>
-    <input type="datetime-local" id="season-end-input" class="input-field" style="margin-bottom:6px">
+    <input type="datetime-local" id="season-end-input" class="input-field" style="margin-bottom:6px" onchange="updateSeasonEndConfirm()">
     <div id="season-end-display" style="font-size:12px;color:var(--accent);margin-bottom:14px;min-height:18px"></div>
     <div class="field-label" data-i18n="transfers_per_viewer_label">Transfers per viewer</div>
     <input type="number" id="transfers-per-viewer" class="input-field" min="1" max="99" value="3" style="margin-bottom:14px">

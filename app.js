@@ -58,6 +58,12 @@ async function reloadFromDB(){
     S.seasonEnd=session.season_end||null;
     S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
     S.transfersPerViewer=session.transfers_per_viewer||3;
+    // Sync entries lock state from DB (source of truth)
+    if(session.is_entries_locked !== undefined){
+      entriesLocked = !!session.is_entries_locked;
+      _applyEntriesToggleUI();
+      try{ localStorage.setItem('ffm_entries_locked', entriesLocked ? '1' : '0'); }catch(e){}
+    }
   }
   S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
   // ── CRITICAL: update events so getScore() reflects latest DB state ──
@@ -133,6 +139,11 @@ function restoreUI(){
     document.getElementById('nb-streamer').style.color='var(--accent)';
   }
   setUIMode('streamer');
+  // Restore entries lock state
+  try{
+    const saved = localStorage.getItem('ffm_entries_locked');
+    if(saved !== null){ entriesLocked = saved === '1'; _applyEntriesToggleUI(); }
+  }catch(e){}
   // Restore season UI elements
   const seasonBadge=document.getElementById('season-badge');
   const seasonSettingsBtn=document.getElementById('season-settings-btn');
@@ -668,14 +679,28 @@ let entriesLocked = false;
 
 function toggleEntries(){
   entriesLocked = !entriesLocked;
-  const btn = document.getElementById('entries-toggle');
-  if(btn){
-    btn.textContent = entriesLocked ? '🔴 LOCKED' : '🟢 OPEN';
-    btn.style.background = entriesLocked ? '#200a0a' : '#0a2010';
-    btn.style.color = entriesLocked ? '#ff5a5a' : '#4aff91';
-    btn.style.borderColor = entriesLocked ? '#ff5a5a' : '#4aff91';
-  }
+  _applyEntriesToggleUI();
   try{ localStorage.setItem('ffm_entries_locked', entriesLocked ? '1' : '0'); }catch(e){}
+  // Persist to DB so server enforces it on new join attempts
+  if(S.sessionCode) db('set_entries_locked', { session_id: S.sessionCode, is_entries_locked: entriesLocked, user_jwt: localStorage.getItem('ffm_streamer_jwt') });
+}
+
+function _applyEntriesToggleUI(){
+  const toggle = document.getElementById('entries-toggle');
+  const knob = document.getElementById('entries-toggle-knob');
+  const text = document.getElementById('entries-toggle-text');
+  const label = document.getElementById('entries-label');
+  if(entriesLocked){
+    if(toggle){ toggle.style.borderColor='#ff5a5a'; toggle.style.background='#200a0a'; }
+    if(knob) knob.style.background='#ff5a5a';
+    if(text){ text.textContent='LOCKED'; text.style.color='#ff5a5a'; }
+    if(label) label.textContent='🔴 New entries: Locked';
+  } else {
+    if(toggle){ toggle.style.borderColor='#4aff91'; toggle.style.background='#0a2010'; }
+    if(knob) knob.style.background='#4aff91';
+    if(text){ text.textContent='OPEN'; text.style.color='#4aff91'; }
+    if(label) label.textContent='🟢 New entries: Open';
+  }
 }
 
 function toggleMOTM(){
@@ -2221,6 +2246,19 @@ function updateDateDisplay(inputId, displayId){
   input.addEventListener('change',()=>{
     display.textContent=input.value?'✓ '+formatDateDisplay(new Date(input.value).toISOString()):'';
   });
+}
+
+function updateSeasonEndConfirm() {
+  const input = document.getElementById('season-end-input');
+  const display = document.getElementById('season-end-display');
+  if (!input || !display) return;
+  if (input.value) {
+    const d = new Date(input.value);
+    display.textContent = '✓ ' + d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    display.style.color = '#4aff91';
+  } else {
+    display.textContent = '';
+  }
 }
 
 // Initialise date displays

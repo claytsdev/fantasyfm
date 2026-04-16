@@ -357,12 +357,16 @@ async function handleSupabase(body) {
     }
     else if (action === 'upsert_viewer') {
       // For season mode: check if new joiners are allowed
-      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,allow_new_joiners`, { headers });
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,allow_new_joiners,is_entries_locked`, { headers });
       const sessions = await sessionR.json();
       const session = sessions[0];
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { headers });
       const existing = await r.json();
-      if (session && session.type === 'season' && !session.allow_new_joiners && existing.length === 0) {
+      // Block new viewers if entries are locked (existing viewers can still update their picks)
+      if (session && session.is_entries_locked && existing.length === 0) {
+        result = { error: 'New entries are currently locked by the streamer.' };
+      }
+      else if (session && session.type === 'season' && !session.allow_new_joiners && existing.length === 0) {
         result = { error: 'This season is not accepting new players' };
       } else if (existing.length > 0) {
         const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null }) });
@@ -405,7 +409,7 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'get_session') {
-      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer`, { headers });
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,is_entries_locked`, { headers });
       const sessions = await r.json();
       result = sessions[0] || null;
     }
@@ -453,6 +457,18 @@ async function handleSupabase(body) {
         method: 'PATCH', headers, body: JSON.stringify({ channel_name: safeName })
       });
       result = { ok: true, channel_name: safeName };
+    }
+    else if (action === 'set_entries_locked') {
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      // Verify the requester owns this session
+      const sessionCheck = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionCheck.json();
+      if (!sessions.length) throw new Error('Session not found');
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised');
+      await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_entries_locked: payload.is_entries_locked }) });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'entries_lock', locked: payload.is_entries_locked });
+      result = { ok: true };
     }
     else if (action === 'end_stream') {
       // End a single stream within a season — sets is_live false but keeps all data
