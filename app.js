@@ -74,7 +74,8 @@ async function reloadFromDB(){
         platform:v.platform||'manual',
         oauthId:v.oauth_id||null,
         lockedAtTs:v.events_at_lock||0,
-        transfersUsed:v.transfers_used||0
+        transfersUsed:v.transfers_used||0,
+        isMod:v.is_mod||false
       };
     });
   }
@@ -124,7 +125,7 @@ function restoreUI(){
   document.getElementById('live-panel').style.display='block';
   document.getElementById('lg-empty').style.display='none';
   document.getElementById('lg-panel').style.display='block';
-  renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
+  renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();renderViewerList();
   startPolling();
   updateOverlayUrl();
   loadLastMatch();
@@ -180,10 +181,20 @@ function startAbly(){
       if(!S.sessionCode)return;
       await reloadFromDB();
       renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
+      renderViewerList();
       const vdash=document.getElementById('vp-dash');
       if(vdash&&vdash.style.display!=='none'){
         const vname=vdash.dataset.viewer;
         if(vname)showDash(vname,false);
+      }
+      // If current viewer was just promoted/demoted, update their UI mode
+      if(oauthUser&&(msg.data.type==='mod_promoted'||msg.data.type==='mod_demoted')){
+        const vdata=S.viewers[oauthUser.username];
+        if(vdata){
+          const shouldBeMod=vdata.isMod;
+          if(shouldBeMod&&uiMode!=='mod')setUIMode('mod');
+          else if(!shouldBeMod&&uiMode==='mod')setUIMode('viewer');
+        }
       }
     });
   }catch(e){
@@ -1364,7 +1375,7 @@ async function joinGame(){
   S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
   S.viewers={};
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0};});
+    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};});
   }
   if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false,transfersUsed:0};
   // Block new viewers if season doesn't allow new joiners
@@ -1821,6 +1832,103 @@ async function submitTransfers(vname){
   showDash(vname);
 }
 
+// ── Mod promotion / demotion ─────────────────────────────────────────────────
+async function promoteMod(viewerName) {
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { alert('You must be logged in as a streamer to do this.'); return; }
+  const safeName = sanitise(viewerName, 60);
+  const res = await db('promote_mod', { session_id: S.sessionCode, viewer_name: safeName, user_jwt: jwt });
+  if (res && res.error) { alert('Could not promote: ' + res.error); return; }
+  if (S.viewers[viewerName]) S.viewers[viewerName].isMod = true;
+  renderViewerList();
+}
+
+async function demoteMod(viewerName) {
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { alert('You must be logged in as a streamer to do this.'); return; }
+  const safeName = sanitise(viewerName, 60);
+  const res = await db('demote_mod', { session_id: S.sessionCode, viewer_name: safeName, user_jwt: jwt });
+  if (res && res.error) { alert('Could not demote: ' + res.error); return; }
+  if (S.viewers[viewerName]) S.viewers[viewerName].isMod = false;
+  renderViewerList();
+}
+
+function renderViewerList() {
+  const el = document.getElementById('viewer-list');
+  if (!el) return;
+  const viewers = Object.entries(S.viewers);
+  if (!viewers.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">No viewers have joined yet.</div>';
+    return;
+  }
+  el.innerHTML = viewers.map(([name, v]) => {
+    const isMod = v.isMod || false;
+    const locked = v.locked ? '🔒' : '⏳';
+    const platBadge = v.platform === 'twitch'
+      ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#9146ff22;color:#9146ff;font-family:var(--font-ui);font-weight:700;margin-left:4px">TW</span>'
+      : v.platform === 'youtube'
+        ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#ff000022;color:#ff0000;font-family:var(--font-ui);font-weight:700;margin-left:4px">YT</span>'
+        : '';
+    const modBadge = isMod ? '<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:#1a1f2e;color:#f5a623;font-family:var(--font-ui);font-weight:700;margin-left:4px;border:1px solid #f5a62355">MOD</span>' : '';
+    const safeName = name.replace(/'/g, "\\'");
+    const modBtn = isMod
+      ? `<button class="evt-btn" onclick="demoteMod('${safeName}')" style="font-size:10px;color:var(--att)">Demote</button>`
+      : `<button class="evt-btn" onclick="promoteMod('${safeName}')" style="font-size:10px;color:#f5a623">Make Mod</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;color:var(--txt);font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${locked} ${name}${platBadge}${modBadge}</span>
+      ${modBtn}
+    </div>`;
+  }).join('');
+}
+
+// ── Admin dashboard ──────────────────────────────────────────────────────────
+let adminRefreshInterval = null;
+
+async function renderAdminTab() {
+  const el = document.getElementById('admin-sessions-list');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">Loading...</div>';
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { el.innerHTML = '<div style="font-size:13px;color:var(--att)">Not authenticated.</div>'; return; }
+  const data = await db('admin_get_sessions', { user_jwt: jwt });
+  if (!Array.isArray(data)) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--att)">' + (data && data.error ? data.error : 'Failed to load.') + '</div>';
+    return;
+  }
+  if (!data.length) { el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">No sessions found.</div>'; return; }
+  const live = data.filter(s => s.is_live);
+  const notLive = data.filter(s => !s.is_live);
+  const renderRow = (s) => {
+    const created = new Date(s.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const liveBadge = s.is_live
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0a200a;color:#4aff91;font-family:var(--font-ui);font-weight:700;border:1px solid #4aff9155">LIVE</span>'
+      : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700">ENDED</span>';
+    const typeBadge = s.type === 'season'
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55">SEASON</span>'
+      : '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:var(--txt);font-weight:600;margin-bottom:3px">${s.id} ${liveBadge} ${typeBadge}</div>
+        <div style="font-size:12px;color:var(--txt2)">${s.streamer_email}</div>
+        <div style="font-size:11px;color:var(--txt3);margin-top:2px">${created} &middot; ${s.viewer_count} viewer${s.viewer_count !== 1 ? 's' : ''}</div>
+      </div>
+    </div>`;
+  };
+  let html = '';
+  if (live.length) {
+    html += `<div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#4aff91;margin-bottom:4px">Live (${live.length})</div>`;
+    html += live.map(renderRow).join('');
+  }
+  if (notLive.length) {
+    html += `<div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin:12px 0 4px">Recent (${notLive.length})</div>`;
+    html += notLive.map(renderRow).join('');
+  }
+  el.innerHTML = html;
+  // Update last-refreshed time
+  const ts = document.getElementById('admin-last-refresh');
+  if (ts) ts.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 let streamerAuthed = false;
 let uiMode = localStorage.getItem('ffm_ui_mode') || null; // null | 'viewer' | 'streamer'
@@ -1829,19 +1937,26 @@ function setUIMode(mode) {
   uiMode = mode;
   try { localStorage.setItem('ffm_ui_mode', mode); } catch(e) {}
   const tabs = {
-    'nb-home':     { viewer: true,  streamer: true  },
-    'nb-setup':    { viewer: false, streamer: true  },
-    'nb-live':     { viewer: false, streamer: true  },
-    'nb-viewer':   { viewer: true,  streamer: false },
-    'nb-league':   { viewer: true,  streamer: true  },
-    'nb-streamer': { viewer: false, streamer: true  },
+    'nb-home':     { viewer: true,  streamer: true,  mod: true  },
+    'nb-setup':    { viewer: false, streamer: true,  mod: false },
+    'nb-live':     { viewer: false, streamer: true,  mod: true  },
+    'nb-viewer':   { viewer: true,  streamer: false, mod: false },
+    'nb-league':   { viewer: true,  streamer: true,  mod: true  },
+    'nb-streamer': { viewer: false, streamer: true,  mod: false },
+    'nb-admin':    { viewer: false, streamer: false, mod: false },
   };
   Object.entries(tabs).forEach(([id, vis]) => {
     const el = document.getElementById(id);
     if (!el) return;
-    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : id === 'nb-home';
+    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : mode === 'mod' ? vis.mod : id === 'nb-home';
     el.style.display = show ? '' : 'none';
   });
+  // Admin tab: only show when streamer AND admin access_type
+  const adminTab = document.getElementById('nb-admin');
+  if(adminTab){
+    const isAdmin = mode === 'streamer' && localStorage.getItem('ffm_access_type') === 'admin';
+    adminTab.style.display = isAdmin ? '' : 'none';
+  }
   // Update switch link
   const switchEl = document.getElementById('mode-switch-link');
   if (switchEl) {
@@ -1851,6 +1966,9 @@ function setUIMode(mode) {
     } else if (mode === 'streamer') {
       switchEl.innerHTML = 'Switch to viewer';
       switchEl.onclick = () => { setUIMode('viewer'); goTab('viewer', document.getElementById('nb-viewer')); };
+    } else if (mode === 'mod') {
+      switchEl.innerHTML = 'Switch to viewer view';
+      switchEl.onclick = () => { setUIMode('viewer'); goTab('viewer', document.getElementById('nb-viewer')); };
     }
     switchEl.style.display = mode ? 'inline' : 'none';
   }
@@ -1859,7 +1977,7 @@ function setUIMode(mode) {
 function clearUIMode() {
   uiMode = null;
   try { localStorage.removeItem('ffm_ui_mode'); } catch(e) {}
-  ['nb-setup','nb-live','nb-viewer','nb-league','nb-streamer'].forEach(id => {
+  ['nb-setup','nb-live','nb-viewer','nb-league','nb-streamer','nb-admin'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
@@ -1881,8 +1999,13 @@ function requireAuth(tab, btn) {
 }
 
 function goTab(tab, btn) {
-  // Protect setup and live tabs
-  if ((tab === 'setup' || tab === 'live') && !checkStreamerAuth()) {
+  // Protect setup tab from non-streamers
+  if (tab === 'setup' && !checkStreamerAuth()) {
+    tab = 'streamer';
+    btn = document.getElementById('nb-streamer');
+  }
+  // Protect live tab: streamers and mods can access, others redirect
+  if (tab === 'live' && !checkStreamerAuth() && uiMode !== 'mod') {
     tab = 'streamer';
     btn = document.getElementById('nb-streamer');
   }
@@ -1890,8 +2013,17 @@ function goTab(tab, btn) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('sec-' + tab).classList.add('active');
   if(btn) btn.classList.add('active');
+  if (tab === 'admin') {
+    renderAdminTab();
+    // Auto-refresh every 30s while on admin tab
+    if (adminRefreshInterval) clearInterval(adminRefreshInterval);
+    adminRefreshInterval = setInterval(renderAdminTab, 30000);
+  } else {
+    if (adminRefreshInterval) { clearInterval(adminRefreshInterval); adminRefreshInterval = null; }
+  }
   if (tab === 'league') renderLeague();
   if (tab === 'streamer') renderStreamerTab();
+  if (tab === 'admin') renderAdminTab();
   if (tab === 'live') { updateSquadTab(); renderSquadManage(); }
   updateSetupTabLabel();
 }
@@ -1933,6 +2065,9 @@ function renderStreamerTab() {
     if (accessType === 'admin') {
       document.getElementById('admin-panel').style.display = 'block';
       loadStreamers();
+      // Show admin nav tab
+      const adminTab = document.getElementById('nb-admin');
+      if (adminTab) adminTab.style.display = '';
     }
     loadTwitchChannel();
     updateSquadTab();

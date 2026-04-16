@@ -30,6 +30,7 @@
     <button class="nav-btn" id="nb-viewer" onclick="goTab('viewer',this)" style="display:none">Your Squad</button>
     <button class="nav-btn" id="nb-league" onclick="goTab('league',this)" style="display:none">Table</button>
     <button class="nav-btn" id="nb-streamer" onclick="goTab('streamer',this)" style="display:none">Settings</button>
+    <button class="nav-btn" id="nb-admin" onclick="goTab('admin',this)" style="display:none;border-color:var(--att);color:var(--att)">Admin</button>
   </div>
   <div style="display:flex;align-items:center;gap:4px;padding:0 12px;border-left:1px solid var(--border)">
     <button class="lang-btn" data-lang="en" onclick="setLang('en')" title="English" style="font-family:var(--font-ui);font-size:10px;font-weight:700;padding:4px 8px;border-radius:3px;border:1px solid var(--accent);background:transparent;color:var(--txt);cursor:pointer;display:flex;align-items:center;gap:4px">
@@ -348,6 +349,17 @@
         </div>
       </div>
 
+      <!-- Viewer list (streamer + mod) -->
+      <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div class="card-title" style="margin-bottom:2px">👥 Viewers</div>
+            <div style="font-size:12px;color:var(--txt3)">Promote a viewer to mod so they can help manage the session.</div>
+          </div>
+        </div>
+        <div id="viewer-list"><div style="font-size:13px;color:var(--txt3)">No viewers yet.</div></div>
+      </div>
+
       <!-- Squad Management (season mode only) -->
       <div id="squad-mgmt-card" style="display:none" class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
@@ -664,6 +676,23 @@
       <button onclick="openModal('pricing')" style="background:none;border:none;font-size:11px;color:#555b72;cursor:pointer;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;padding:0">Pricing</button>
       <button onclick="openModal('changelog')" style="background:none;border:none;font-size:11px;color:#555b72;cursor:pointer;font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;padding:0">Changelog</button>
     </div>
+  </div>
+</div>
+
+<!-- ADMIN DASHBOARD -->
+<div class="section" id="sec-admin">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+    <div>
+      <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--att);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Admin</div>
+      <div style="font-family:var(--font-ui);font-size:22px;font-weight:700;color:var(--txt);text-transform:uppercase">Live Sessions</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="admin-last-refresh" style="font-size:11px;color:var(--txt3);font-family:var(--font-ui)"></span>
+      <button class="btn" onclick="renderAdminTab()" style="font-size:11px">Refresh</button>
+    </div>
+  </div>
+  <div class="card">
+    <div id="admin-sessions-list"><div style="font-size:13px;color:var(--txt3)">Loading...</div></div>
   </div>
 </div>
 

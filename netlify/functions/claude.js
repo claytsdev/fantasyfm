@@ -374,7 +374,7 @@ async function handleSupabase(body) {
       await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer' });
     }
     else if (action === 'get_viewers') {
-      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used`, { headers });
+      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
       result = await r.json();
     }
     else if (action === 'add_event') {
@@ -470,6 +470,63 @@ async function handleSupabase(body) {
       const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
       result = await upd.json();
       await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer' });
+    }
+    else if (action === 'promote_mod') {
+      // Verify the requesting user owns this session
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      // Decode user_id from JWT (payload is base64 middle segment)
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised to manage this session');
+      // Promote the viewer
+      await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ is_mod: true })
+      });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'mod_promoted', viewer_name: payload.viewer_name });
+      result = { ok: true };
+    }
+    else if (action === 'demote_mod') {
+      // Verify the requesting user owns this session
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised to manage this session');
+      // Demote the viewer
+      await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ is_mod: false })
+      });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'mod_demoted', viewer_name: payload.viewer_name });
+      result = { ok: true };
+    }
+    else if (action === 'admin_get_sessions') {
+      // Admin only — validate access_type server-side via JWT
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const adminCheck = await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}&select=access_type`, { headers });
+      const admins = await adminCheck.json();
+      if (!admins.length || admins[0].access_type !== 'admin') throw new Error('Admin access required');
+      // Fetch all sessions with streamer info and viewer counts
+      const sessionsR = await fetch(`${base}/sessions?select=id,is_live,type,season_end,created_at,user_id&order=created_at.desc`, { headers });
+      const sessions = await sessionsR.json();
+      // For each session fetch viewer count and streamer email
+      const enriched = await Promise.all(sessions.map(async (s) => {
+        const [viewersR, streamerR] = await Promise.all([
+          fetch(`${base}/viewers?session_id=eq.${s.id}&select=viewer_name`, { headers }),
+          fetch(`${base}/streamers?id=eq.${s.user_id}&select=email`, { headers })
+        ]);
+        const viewers = await viewersR.json();
+        const streamers = await streamerR.json();
+        return {
+          ...s,
+          viewer_count: viewers.length,
+          streamer_email: streamers[0]?.email || 'Unknown'
+        };
+      }));
+      result = enriched;
     }
     else if (action === 'reset_session') {
       await fetch(`${base}/events?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });
