@@ -15,7 +15,7 @@ async function ablyToken(payload) {
   const key = process.env.ABLY_API_KEY;
   if (!key) return { statusCode: 500, body: JSON.stringify({ error: 'Ably not configured' }) };
   const sessionId = payload && payload.session_id ? payload.session_id : '*';
-  const capability = { ['ffm-'+sessionId]: ['subscribe'] };
+  const capability = JSON.stringify({ ['ffm-'+sessionId]: ['subscribe'] });
   const r = await fetch(`https://rest.ably.io/keys/${key.split(':')[0]}/requestToken`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + Buffer.from(key).toString('base64') },
