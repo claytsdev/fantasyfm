@@ -428,13 +428,13 @@ async function startOneOff(){
 }
 
 async function startSeason(){
-  const seasonEnd=document.getElementById('season-end-input').value;
+  const seasonName=document.getElementById('season-name-input').value.trim();
   const allowNewJoiners=document.getElementById('allow-new-joiners').checked;
   const transfersPerViewer=parseInt(document.getElementById('transfers-per-viewer').value,10);
-  if(!seasonEnd){alert('Please set a season end date.');return;}
   if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
   hideSeasonSetupModal();
-  S.seasonEnd=new Date(seasonEnd).toISOString();
+  S.seasonEnd=null;
+  S.seasonName=seasonName||null;
   S.allowNewJoiners=allowNewJoiners;
   S.transfersPerViewer=transfersPerViewer;
   await _goLive('season');
@@ -1776,13 +1776,10 @@ function hideSeasonSettingsModal(){
   if(m)m.style.display='none';
 }
 async function saveSeasonSettings(){
-  const seasonEnd=document.getElementById('edit-season-end').value;
   const allowNewJoiners=document.getElementById('edit-allow-new-joiners').checked;
   const transfersPerViewer=parseInt(document.getElementById('edit-transfers-per-viewer').value,10);
-  if(!seasonEnd){alert('Please set a season end date.');return;}
   if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
-  await db('update_season_settings',{session_id:S.sessionCode,season_end:new Date(seasonEnd).toISOString(),allow_new_joiners:allowNewJoiners,transfers_per_viewer:transfersPerViewer});
-  S.seasonEnd=new Date(seasonEnd).toISOString();
+  await db('update_season_settings',{session_id:S.sessionCode,season_end:null,allow_new_joiners:allowNewJoiners,transfers_per_viewer:transfersPerViewer});
   S.allowNewJoiners=allowNewJoiners;
   S.transfersPerViewer=transfersPerViewer;
   hideSeasonSettingsModal();

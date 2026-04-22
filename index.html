@@ -878,11 +878,14 @@
 <div id="season-setup-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:2000;align-items:center;justify-content:center;padding:20px">
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:28px;max-width:420px;width:100%">
     <div style="font-family:var(--font-ui);font-size:18px;font-weight:700;color:#c084fc;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:20px">🏆 New Season Setup</div>
-    <div class="field-label" data-i18n="season_end_label">Season end date &amp; time</div>
-    <input type="datetime-local" id="season-end-input" class="input-field" style="margin-bottom:6px" onchange="updateSeasonEndConfirm()">
-    <div id="season-end-display" style="font-size:12px;color:var(--accent);margin-bottom:14px;min-height:18px"></div>
+    <div class="field-label">Season name</div>
+    <input type="text" id="season-name-input" class="input-field" placeholder="e.g. Three Counties - S3" style="margin-bottom:14px">
+    <div style="font-size:12px;color:var(--txt3);margin-bottom:16px;line-height:1.5;padding:10px 12px;background:var(--bg3);border-radius:6px;border:1px solid var(--border)">
+      📅 This Season session will run until you choose to close it, across multiple streams.
+    </div>
     <div class="field-label" data-i18n="transfers_per_viewer_label">Transfers per viewer</div>
-    <input type="number" id="transfers-per-viewer" class="input-field" min="1" max="99" value="3" style="margin-bottom:14px">
+    <input type="number" id="transfers-per-viewer" class="input-field" min="1" max="99" value="3" style="margin-bottom:4px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:14px">You can change this later in Season Settings.</div>
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:20px;font-size:13px;color:var(--txt2)">
       <input type="checkbox" id="allow-new-joiners" checked style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)">
       <span data-i18n="allow_new_joiners_label">Allow new viewers to join mid-season</span>
@@ -898,11 +901,9 @@
 <div id="season-settings-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:2000;align-items:center;justify-content:center;padding:20px">
   <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:28px;max-width:420px;width:100%">
     <div style="font-family:var(--font-ui);font-size:18px;font-weight:700;color:#c084fc;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:20px">⚙️ Season Settings</div>
-    <div class="field-label" data-i18n="season_end_label">Season end date &amp; time</div>
-    <input type="datetime-local" id="edit-season-end" class="input-field" style="margin-bottom:6px">
-    <div id="edit-season-end-display" style="font-size:12px;color:var(--accent);margin-bottom:14px;min-height:18px"></div>
     <div class="field-label" data-i18n="transfers_per_viewer_label">Transfers per viewer</div>
-    <input type="number" id="edit-transfers-per-viewer" class="input-field" min="1" max="99" style="margin-bottom:14px">
+    <input type="number" id="edit-transfers-per-viewer" class="input-field" min="1" max="99" style="margin-bottom:4px">
+    <div style="font-size:11px;color:var(--txt3);margin-bottom:14px">Number of squad changes each viewer can make during the season.</div>
     <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:20px;font-size:13px;color:var(--txt2)">
       <input type="checkbox" id="edit-allow-new-joiners" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent)">
       <span data-i18n="allow_new_joiners_label">Allow new viewers to join mid-season</span>
