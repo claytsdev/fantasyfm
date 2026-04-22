@@ -472,6 +472,30 @@ async function _goLive(type){
   updateSquadTab();
   updateSetupTabLabel();
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
+  showChatCopyModal(S.sessionCode);
+}
+
+function showChatCopyModal(code) {
+  const text = `Join my FantasyFM game at fantasyfm.io using my code: ${code}`;
+  const el = document.getElementById('chat-copy-modal');
+  const ta = document.getElementById('chat-copy-text');
+  if (!el || !ta) return;
+  ta.value = text;
+  el.style.display = 'flex';
+}
+
+function closeChatCopyModal() {
+  const el = document.getElementById('chat-copy-modal');
+  if (el) el.style.display = 'none';
+}
+
+function copyChatText() {
+  const ta = document.getElementById('chat-copy-text');
+  if (!ta) return;
+  navigator.clipboard.writeText(ta.value).then(() => {
+    const btn = document.getElementById('chat-copy-btn');
+    if (btn) { btn.textContent = 'Copied! ✓'; btn.style.background = '#22c55e'; setTimeout(() => { btn.textContent = 'Copy to clipboard'; btn.style.background = ''; }, 2000); }
+  });
 }
 
 async function doMatchUpload(e){
@@ -1800,7 +1824,6 @@ function renderSquadManage(){
         <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
           ${posAvatar(p.pos,24)}
           <span style="flex:1;font-size:13px;color:var(--txt)">${p.name}</span>
-          <button class="btn" onclick="squadRemovePlayer('${p.name.replace(/'/g,"\\'")}')" style="font-size:10px;padding:3px 8px;border-color:var(--att);color:var(--att)">Remove</button>
         </div>`).join('')}
     </div>`;
   }).join('');
@@ -1821,12 +1844,6 @@ async function squadAddPlayer(){
   renderSquadManage();
 }
 
-async function squadRemovePlayer(name){
-  if(!confirm(`Remove ${name} from the squad? Their existing picks will remain but they won't be available for transfers.`))return;
-  S.roster=S.roster.filter(p=>p.name!==name);
-  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
-  renderSquadManage();
-}
 
 function updateSquadTab(){
   const card=document.getElementById('squad-mgmt-card');
