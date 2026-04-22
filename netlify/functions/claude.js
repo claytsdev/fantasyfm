@@ -82,7 +82,7 @@ async function handleLogin(payload) {
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Invalid email or password' }) };
   }
 
-  const sr = await fetch(`${sbBase()}/streamers?email=eq.${encodeURIComponent(data.user.email)}&select=email,access_type,expires_at`, { headers: sbHeaders() });
+  const sr = await fetch(`${sbBase()}/streamers?email=eq.${encodeURIComponent(data.user.email)}&select=email,access_type,expires_at,channel_name`, { headers: sbHeaders() });
   const streamers = await sr.json();
 
   if (!streamers.length) {
@@ -90,11 +90,18 @@ async function handleLogin(payload) {
   }
 
   const streamer = streamers[0];
-  if (streamer.access_type !== 'admin' && streamer.expires_at && new Date(streamer.expires_at) < new Date()) {
-    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Your beta access has expired. Paid access is coming soon.' }) };
+
+  // Block anyone who isn't paid or admin
+  if (streamer.access_type === 'beta' || streamer.access_type === 'expired') {
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'NEEDS_PAYMENT' }) };
   }
 
-  return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, email: streamer.email, access_type: streamer.access_type, expires_at: streamer.expires_at, access_token: data.access_token, user_id: data.user.id }) };
+  // Block paid accounts whose subscription has expired
+  if (streamer.access_type === 'paid' && streamer.expires_at && new Date(streamer.expires_at) < new Date()) {
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'SUBSCRIPTION_EXPIRED' }) };
+  }
+
+  return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, email: streamer.email, access_type: streamer.access_type, expires_at: streamer.expires_at, channel_name: streamer.channel_name || '', access_token: data.access_token, user_id: data.user.id }) };
 }
 
 async function createCheckout(payload) {
@@ -332,9 +339,14 @@ async function handleSupabase(body) {
       const sessionHeaders = payload.user_jwt
         ? { 'Content-Type': 'application/json', 'apikey': process.env.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${payload.user_jwt}`, 'Prefer': 'return=representation' }
         : headers;
-      const body = { id: payload.id, is_live: true };
+      const body = { id: payload.id, is_live: true, type: payload.type || 'oneoff' };
       // Only pass user_id explicitly if no JWT (fallback to service role path)
       if (!payload.user_jwt && payload.user_id) body.user_id = payload.user_id;
+      if (payload.type === 'season') {
+        body.season_end = payload.season_end || null;
+        body.allow_new_joiners = payload.allow_new_joiners !== undefined ? payload.allow_new_joiners : true;
+        body.transfers_per_viewer = payload.transfers_per_viewer || 3;
+      }
       const r = await fetch(`${base}/sessions`, { method: 'POST', headers: sessionHeaders, body: JSON.stringify(body) });
       result = await r.json();
     }
@@ -351,19 +363,29 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'upsert_viewer') {
+      // For season mode: check if new joiners are allowed
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,allow_new_joiners,is_entries_locked`, { headers });
+      const sessions = await sessionR.json();
+      const session = sessions[0];
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { headers });
       const existing = await r.json();
-      if (existing.length > 0) {
+      // Block new viewers if entries are locked (existing viewers can still update their picks)
+      if (session && session.is_entries_locked && existing.length === 0) {
+        result = { error: 'New entries are currently locked by the streamer.' };
+      }
+      else if (session && session.type === 'season' && !session.allow_new_joiners && existing.length === 0) {
+        result = { error: 'This season is not accepting new players' };
+      } else if (existing.length > 0) {
         const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, { method: 'PATCH', headers, body: JSON.stringify({ pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null }) });
         result = await upd.json();
       } else {
-        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0 }) });
+        const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0, transfers_used: 0 }) });
         result = await ins.json();
       }
       await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer' });
     }
     else if (action === 'get_viewers') {
-      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock`, { headers });
+      const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
       result = await r.json();
     }
     else if (action === 'add_event') {
@@ -394,7 +416,7 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'get_session') {
-      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live`, { headers });
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,is_entries_locked`, { headers });
       const sessions = await r.json();
       result = sessions[0] || null;
     }
@@ -427,6 +449,147 @@ async function handleSupabase(body) {
     else if (action === 'resolve_bug') {
       await fetch(`${base}/bug_reports?id=eq.${payload.id}`, { method: 'PATCH', headers, body: JSON.stringify({ resolved: payload.resolved }) });
       result = { ok: true };
+    }
+    else if (action === 'update_season_settings') {
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ season_end: payload.season_end, allow_new_joiners: payload.allow_new_joiners, transfers_per_viewer: payload.transfers_per_viewer }) });
+      result = await r.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'season_settings' });
+    }
+    else if (action === 'update_channel_name') {
+      // Validate via JWT — streamer can only update their own channel name
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const safeName = String(payload.channel_name || '').replace(/[<>"'`]/g, '').trim().slice(0, 60);
+      await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ channel_name: safeName })
+      });
+      result = { ok: true, channel_name: safeName };
+    }
+    else if (action === 'set_entries_locked') {
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      // Verify the requester owns this session
+      const sessionCheck = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionCheck.json();
+      if (!sessions.length) throw new Error('Session not found');
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised');
+      await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_entries_locked: payload.is_entries_locked }) });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'entries_lock', locked: payload.is_entries_locked });
+      result = { ok: true };
+    }
+    else if (action === 'end_stream') {
+      // End a single stream within a season — sets is_live false but keeps all data
+      await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ is_live: false }) });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'stream_ended' });
+      result = { ok: true };
+    }
+    else if (action === 'use_transfer') {
+      // Validate pos
+      const allowedPos = ['pick_def', 'pick_mid', 'pick_att', 'pick_cap'];
+      if (!allowedPos.includes(payload.pos)) throw new Error('Invalid pos');
+      const safeName = String(payload.new_player).replace(/[<>"'`]/g, '').slice(0, 60);
+      // Fetch session
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=type,transfers_per_viewer`, { headers });
+      const sessions = await sessionR.json();
+      const session = sessions[0];
+      if (!session || session.type !== 'season') throw new Error('Transfers only available in season mode');
+      // Fetch viewer
+      const viewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=transfers_used`, { headers });
+      const viewers = await viewerR.json();
+      const viewer = viewers[0];
+      if (!viewer) throw new Error('Viewer not found');
+      if (viewer.transfers_used >= session.transfers_per_viewer) throw new Error('No transfers remaining');
+      // Apply
+      const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
+      result = await upd.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer' });
+    }
+    else if (action === 'promote_mod') {
+      // Verify the requesting user owns this session
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      // Decode user_id from JWT (payload is base64 middle segment)
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised to manage this session');
+      // Promote the viewer
+      await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ is_mod: true })
+      });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'mod_promoted', viewer_name: payload.viewer_name });
+      result = { ok: true };
+    }
+    else if (action === 'demote_mod') {
+      // Verify the requesting user owns this session
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const sessionR = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=user_id`, { headers });
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      if (sessions[0].user_id !== jwtPayload.sub) throw new Error('Not authorised to manage this session');
+      // Demote the viewer
+      await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}`, {
+        method: 'PATCH', headers, body: JSON.stringify({ is_mod: false })
+      });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'mod_demoted', viewer_name: payload.viewer_name });
+      result = { ok: true };
+    }
+    else if (action === 'admin_get_sessions') {
+      // Admin only — validate access_type server-side via JWT
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const adminCheck = await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}&select=access_type`, { headers });
+      const admins = await adminCheck.json();
+      if (!admins.length || admins[0].access_type !== 'admin') throw new Error('Admin access required');
+      // Fetch all sessions with streamer info and viewer counts
+      const sessionsR = await fetch(`${base}/sessions?select=id,is_live,type,season_end,created_at,user_id&order=created_at.desc`, { headers });
+      const sessions = await sessionsR.json();
+      // For each session fetch viewer count and streamer email
+      const enriched = await Promise.all(sessions.map(async (s) => {
+        const [viewersR, streamerR] = await Promise.all([
+          fetch(`${base}/viewers?session_id=eq.${s.id}&select=viewer_name`, { headers }),
+          fetch(`${base}/streamers?id=eq.${s.user_id}&select=email,channel_name`, { headers })
+        ]);
+        const viewers = await viewersR.json();
+        const streamers = await streamerR.json();
+        return {
+          ...s,
+          viewer_count: viewers.length,
+          streamer_email: streamers[0]?.email || 'Unknown',
+          streamer_channel: streamers[0]?.channel_name || ''
+        };
+      }));
+      result = enriched;
+    }
+    else if (action === 'admin_inspect_session') {
+      // Admin only
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const adminCheck = await fetch(`${base}/streamers?email=eq.${encodeURIComponent(jwtPayload.email)}&select=access_type`, { headers });
+      const admins = await adminCheck.json();
+      if (!admins.length || admins[0].access_type !== 'admin') throw new Error('Admin access required');
+      const sessionId = payload.session_id;
+      const [sessionR, rosterR, eventsR, viewersR] = await Promise.all([
+        fetch(`${base}/sessions?id=eq.${sessionId}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,created_at,user_id`, { headers }),
+        fetch(`${base}/roster?session_id=eq.${sessionId}&select=name,pos&order=pos.asc`, { headers }),
+        fetch(`${base}/events?session_id=eq.${sessionId}&select=player_name,pos,event_type,points,created_at&order=id.asc`, { headers }),
+        fetch(`${base}/viewers?session_id=eq.${sessionId}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,is_mod,transfers_used`, { headers })
+      ]);
+      const sessions = await sessionR.json();
+      if (!sessions.length) throw new Error('Session not found');
+      const session = sessions[0];
+      // Get streamer info
+      const streamerR = await fetch(`${base}/streamers?id=eq.${session.user_id}&select=email,channel_name`, { headers });
+      const streamers = await streamerR.json();
+      result = {
+        session,
+        streamer_email: streamers[0]?.email || 'Unknown',
+        streamer_channel: streamers[0]?.channel_name || '',
+        roster: await rosterR.json(),
+        events: await eventsR.json(),
+        viewers: await viewersR.json()
+      };
     }
     else if (action === 'reset_session') {
       await fetch(`${base}/events?session_id=eq.${payload.session_id}`, { method: 'DELETE', headers });

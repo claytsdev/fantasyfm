@@ -1,4 +1,4 @@
-let S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false};
+let S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
 let pendingMatch=[];
 let pendingMatchResult=null;
 function sanitise(str,maxLen=100){
@@ -19,7 +19,7 @@ async function db(action,payload){
 }
 
 // ── Local state helpers ──────────────────────────────────────────────────────
-function save(){try{localStorage.setItem('ffm_state',JSON.stringify({sessionCode:S.sessionCode,isLive:S.isLive,viewerName:oauthUser?oauthUser.username:null}));}catch(e){}}
+function save(){try{localStorage.setItem('ffm_state',JSON.stringify({sessionCode:S.sessionCode,isLive:S.isLive,type:S.type,seasonEnd:S.seasonEnd,allowNewJoiners:S.allowNewJoiners,transfersPerViewer:S.transfersPerViewer,viewerName:oauthUser?oauthUser.username:null}));}catch(e){}}
 function saveAvatar(name,dataUrl){try{localStorage.setItem('ffm_av_'+name,dataUrl);}catch(e){}}
 function loadAvatar(name){try{return localStorage.getItem('ffm_av_'+name)||null;}catch(e){return null;}}
 function clearAvatars(){try{Object.keys(localStorage).filter(k=>k.startsWith('ffm_av_')).forEach(k=>localStorage.removeItem(k));}catch(e){}}
@@ -29,12 +29,16 @@ async function load(){
     const r=localStorage.getItem('ffm_state');
     if(r){
       const saved=JSON.parse(r);
-      if(saved.isLive&&saved.sessionCode){
+      if(saved.sessionCode){
         S.sessionCode=saved.sessionCode;
-        S.isLive=true;
+        S.isLive=saved.isLive||false;
+        S.type=saved.type||'oneoff';
+        S.seasonEnd=saved.seasonEnd||null;
+        S.allowNewJoiners=saved.allowNewJoiners!==undefined?saved.allowNewJoiners:true;
+        S.transfersPerViewer=saved.transfersPerViewer||3;
         // Reload from DB
         await reloadFromDB();
-        restoreUI();
+        if(saved.isLive)restoreUI();
       }
     }
   }catch(e){}
@@ -42,11 +46,25 @@ async function load(){
 
 async function reloadFromDB(){
   if(!S.sessionCode)return;
-  const [roster,events,viewers]=await Promise.all([
+  const [session,roster,events,viewers]=await Promise.all([
+    db('get_session',{session_id:S.sessionCode}),
     db('get_roster',{session_id:S.sessionCode}),
     db('get_events',{session_id:S.sessionCode}),
     db('get_viewers',{session_id:S.sessionCode})
   ]);
+  if(session){
+    S.isLive=session.is_live;
+    S.type=session.type||'oneoff';
+    S.seasonEnd=session.season_end||null;
+    S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
+    S.transfersPerViewer=session.transfers_per_viewer||3;
+    // Sync entries lock state from DB (source of truth)
+    if(session.is_entries_locked !== undefined){
+      entriesLocked = !!session.is_entries_locked;
+      _applyEntriesToggleUI();
+      try{ localStorage.setItem('ffm_entries_locked', entriesLocked ? '1' : '0'); }catch(e){}
+    }
+  }
   S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
   // ── CRITICAL: update events so getScore() reflects latest DB state ──
   if(Array.isArray(events)){
@@ -61,7 +79,9 @@ async function reloadFromDB(){
         locked:v.locked,
         platform:v.platform||'manual',
         oauthId:v.oauth_id||null,
-        lockedAtTs:v.events_at_lock||0
+        lockedAtTs:v.events_at_lock||0,
+        transfersUsed:v.transfers_used||0,
+        isMod:v.is_mod||false
       };
     });
   }
@@ -109,18 +129,31 @@ function restoreUI(){
   document.getElementById('live-pill').style.display='inline-block';
   document.getElementById('live-locked').style.display='none';
   document.getElementById('live-panel').style.display='block';
-  // Hide language selector once live — language shouldn't change mid-session
-  const langCard = document.querySelector('.lang-selector-card');
-  if(langCard) langCard.style.display='none';
   document.getElementById('lg-empty').style.display='none';
   document.getElementById('lg-panel').style.display='block';
-  renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
+  renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();renderViewerList();
   startPolling();
   updateOverlayUrl();
   loadLastMatch();
   if(checkStreamerAuth()){
     document.getElementById('nb-streamer').style.color='var(--accent)';
   }
+  setUIMode('streamer');
+  // Restore entries lock state
+  try{
+    const saved = localStorage.getItem('ffm_entries_locked');
+    if(saved !== null){ entriesLocked = saved === '1'; _applyEntriesToggleUI(); }
+  }catch(e){}
+  // Restore season UI elements
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  const endResetBtn=document.getElementById('end-reset-btn');
+  if(seasonBadge)seasonBadge.style.display=S.type==='season'?'inline-block':'none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display=S.type==='season'?'inline-block':'none';
+  if(endResetBtn)endResetBtn.textContent=S.type==='season'?'End Season':'Reset session';
+  updateSquadTab();
+  updateSetupTabLabel();
+  renderSquadManage();
 }
 
 let pollInterval=null; // kept for fallback only
@@ -159,10 +192,20 @@ function startAbly(){
       if(!S.sessionCode)return;
       await reloadFromDB();
       renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
+      renderViewerList();
       const vdash=document.getElementById('vp-dash');
       if(vdash&&vdash.style.display!=='none'){
         const vname=vdash.dataset.viewer;
         if(vname)showDash(vname,false);
+      }
+      // If current viewer was just promoted/demoted, update their UI mode
+      if(oauthUser&&(msg.data.type==='mod_promoted'||msg.data.type==='mod_demoted')){
+        const vdata=S.viewers[oauthUser.username];
+        if(vdata){
+          const shouldBeMod=vdata.isMod;
+          if(shouldBeMod&&uiMode!=='mod')setUIMode('mod');
+          else if(!shouldBeMod&&uiMode==='mod')setUIMode('viewer');
+        }
       }
     });
   }catch(e){
@@ -357,11 +400,57 @@ async function goLive(){
   const valid=S.roster.filter(p=>p.name.trim());
   if(!valid.some(p=>p.pos==='DEF')||!valid.some(p=>p.pos==='MID')||!valid.some(p=>p.pos==='ATT')){alert('You need at least one DEF, one MID, and one ATT.');return;}
   S.roster=valid;
+  // Show session type picker instead of going live immediately
+  showSessionTypeModal();
+}
+
+function showSessionTypeModal(){
+  const m=document.getElementById('session-type-modal');
+  if(m)m.style.display='flex';
+}
+function hideSessionTypeModal(){
+  const m=document.getElementById('session-type-modal');
+  if(m)m.style.display='none';
+}
+function showSeasonSetupModal(){
+  hideSessionTypeModal();
+  const m=document.getElementById('season-setup-modal');
+  if(m)m.style.display='flex';
+}
+function hideSeasonSetupModal(){
+  const m=document.getElementById('season-setup-modal');
+  if(m)m.style.display='none';
+}
+
+async function startOneOff(){
+  hideSessionTypeModal();
+  await _goLive('oneoff');
+}
+
+async function startSeason(){
+  const seasonName=document.getElementById('season-name-input').value.trim();
+  const allowNewJoiners=document.getElementById('allow-new-joiners').checked;
+  const transfersPerViewer=parseInt(document.getElementById('transfers-per-viewer').value,10);
+  if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
+  hideSeasonSetupModal();
+  S.seasonEnd=null;
+  S.seasonName=seasonName||null;
+  S.allowNewJoiners=allowNewJoiners;
+  S.transfersPerViewer=transfersPerViewer;
+  await _goLive('season');
+}
+
+async function _goLive(type){
   S.sessionCode=(()=>{const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='FM-';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return s;})();
-  S.isLive=true;S.events=[];S.viewers={};
-  // Save to DB
-  const _sjwt = localStorage.getItem('ffm_streamer_jwt')||null;
-  await db('create_session',{id:S.sessionCode, user_jwt:_sjwt});
+  S.isLive=true;S.type=type;S.events=[];S.viewers={};
+  const _sjwt=localStorage.getItem('ffm_streamer_jwt')||null;
+  const sessionPayload={id:S.sessionCode,user_jwt:_sjwt,type};
+  if(type==='season'){
+    sessionPayload.season_end=S.seasonEnd;
+    sessionPayload.allow_new_joiners=S.allowNewJoiners;
+    sessionPayload.transfers_per_viewer=S.transfersPerViewer;
+  }
+  await db('create_session',sessionPayload);
   await db('save_roster',{session_id:S.sessionCode,players:S.roster});
   save();
   document.getElementById('code-val').textContent=S.sessionCode;
@@ -373,7 +462,40 @@ async function goLive(){
   document.getElementById('live-panel').style.display='block';
   document.getElementById('lg-empty').style.display='none';
   document.getElementById('lg-panel').style.display='block';
+  // Show/hide season badge and settings button
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  const endResetBtn=document.getElementById('end-reset-btn');
+  if(seasonBadge)seasonBadge.style.display=type==='season'?'inline-block':'none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display=type==='season'?'inline-block':'none';
+  if(endResetBtn)endResetBtn.textContent=type==='season'?'End Season':'Reset session';
+  updateSquadTab();
+  updateSetupTabLabel();
   renderScoring();startPolling();updateOverlayUrl();loadLastMatch();
+  showChatCopyModal(S.sessionCode);
+}
+
+function showChatCopyModal(code) {
+  const text = `Join my FantasyFM game at fantasyfm.io using my code: ${code}`;
+  const el = document.getElementById('chat-copy-modal');
+  const ta = document.getElementById('chat-copy-text');
+  if (!el || !ta) return;
+  ta.value = text;
+  el.style.display = 'flex';
+}
+
+function closeChatCopyModal() {
+  const el = document.getElementById('chat-copy-modal');
+  if (el) el.style.display = 'none';
+}
+
+function copyChatText() {
+  const ta = document.getElementById('chat-copy-text');
+  if (!ta) return;
+  navigator.clipboard.writeText(ta.value).then(() => {
+    const btn = document.getElementById('chat-copy-btn');
+    if (btn) { btn.textContent = 'Copied! ✓'; btn.style.background = '#22c55e'; setTimeout(() => { btn.textContent = 'Copy to clipboard'; btn.style.background = ''; }, 2000); }
+  });
 }
 
 async function doMatchUpload(e){
@@ -581,14 +703,28 @@ let entriesLocked = false;
 
 function toggleEntries(){
   entriesLocked = !entriesLocked;
-  const btn = document.getElementById('entries-toggle');
-  if(btn){
-    btn.textContent = entriesLocked ? '🔴 LOCKED' : '🟢 OPEN';
-    btn.style.background = entriesLocked ? '#200a0a' : '#0a2010';
-    btn.style.color = entriesLocked ? '#ff5a5a' : '#4aff91';
-    btn.style.borderColor = entriesLocked ? '#ff5a5a' : '#4aff91';
-  }
+  _applyEntriesToggleUI();
   try{ localStorage.setItem('ffm_entries_locked', entriesLocked ? '1' : '0'); }catch(e){}
+  // Persist to DB so server enforces it on new join attempts
+  if(S.sessionCode) db('set_entries_locked', { session_id: S.sessionCode, is_entries_locked: entriesLocked, user_jwt: localStorage.getItem('ffm_streamer_jwt') });
+}
+
+function _applyEntriesToggleUI(){
+  const toggle = document.getElementById('entries-toggle');
+  const knob = document.getElementById('entries-toggle-knob');
+  const text = document.getElementById('entries-toggle-text');
+  const label = document.getElementById('entries-label');
+  if(entriesLocked){
+    if(toggle){ toggle.style.borderColor='#ff5a5a'; toggle.style.background='#200a0a'; }
+    if(knob) knob.style.background='#ff5a5a';
+    if(text){ text.textContent='LOCKED'; text.style.color='#ff5a5a'; }
+    if(label) label.textContent='🔴 New entries: Locked';
+  } else {
+    if(toggle){ toggle.style.borderColor='#4aff91'; toggle.style.background='#0a2010'; }
+    if(knob) knob.style.background='#4aff91';
+    if(text){ text.textContent='OPEN'; text.style.color='#4aff91'; }
+    if(label) label.textContent='🟢 New entries: Open';
+  }
 }
 
 function toggleMOTM(){
@@ -795,6 +931,14 @@ const LANG = {
     err_entries_locked: 'New entries are currently closed. Wait for the streamer to open entries.',
     squad_prompt_positions: 'GK stays GK, DEF (defenders/CBs/fullbacks/wing-backs), MID (all midfielders including DM/AM), ATT (strikers/forwards/wingers).',
     stats_goals_col: 'Goals', stats_assists_col: 'Assists', stats_rating_col: 'Rating',
+    session_type_title: 'Start a new competition',
+    oneoff_label: 'One-off Session', oneoff_desc: 'Single stream. No transfers.',
+    season_label: 'New Season', season_desc: 'Runs across multiple streams. Viewers keep their picks.',
+    season_end_label: 'Season end date & time',
+    allow_new_joiners_label: 'Allow new viewers to join mid-season',
+    transfers_per_viewer_label: 'Transfers per viewer',
+    end_stream_btn: 'End Stream', season_settings_btn: 'Season Settings',
+    season_badge: 'SEASON',
   },
   fr: {
     home: 'Accueil', setup: 'Équipe', controls: 'Contrôles', viewer: 'Spectateur', table: 'Classement', streamer: 'Streamer',
@@ -869,6 +1013,14 @@ const LANG = {
     err_entries_locked: 'Les nouvelles entrées sont fermées. Attendez le streamer.',
     squad_prompt_positions: 'GB=GK, D/DC/DL/DR/DLC/DRC=DEF, MD/MDC/MDG/MDD/M/MC/MG/MO/MOC/MOG/MOD/MCA=MID, BT/BTL/BTR/BTD=ATT. Output only: GK, DEF, MID, ATT.',
     stats_goals_col: 'Buts', stats_assists_col: 'Passes décisi...', stats_rating_col: 'Note',
+    session_type_title: 'Démarrer une compétition',
+    oneoff_label: 'Session unique', oneoff_desc: 'Un seul stream. Pas de transferts.',
+    season_label: 'Nouvelle saison', season_desc: 'Sur plusieurs streams. Les spectateurs gardent leurs choix.',
+    season_end_label: 'Date et heure de fin de saison',
+    allow_new_joiners_label: 'Autoriser de nouveaux joueurs en cours de saison',
+    transfers_per_viewer_label: 'Transferts par spectateur',
+    end_stream_btn: 'Terminer le stream', season_settings_btn: 'Paramètres saison',
+    season_badge: 'SAISON',
   },
   de: {
     home: 'Start', setup: 'Kader', controls: 'Steuerung', viewer: 'Zuschauer', table: 'Tabelle', streamer: 'Streamer',
@@ -943,6 +1095,14 @@ const LANG = {
     err_entries_locked: 'Neue Einträge sind gesperrt. Warte auf den Streamer.',
     squad_prompt_positions: 'TW=GK, IV/LA/RA/LV/RV/LMV/RMV=DEF, ZM/DM/OM/LM/RM/ZOM/ZDM/LAM/RAM=MID, ST/LS/RS=ATT. Output only: GK, DEF, MID, ATT.',
     stats_goals_col: 'Tore', stats_assists_col: 'Vorlagen', stats_rating_col: 'Note',
+    session_type_title: 'Neue Wettbewerb starten',
+    oneoff_label: 'Einzelsession', oneoff_desc: 'Nur ein Stream. Keine Transfers.',
+    season_label: 'Neue Saison', season_desc: 'Über mehrere Streams. Zuschauer behalten ihre Auswahl.',
+    season_end_label: 'Saisonende (Datum & Uhrzeit)',
+    allow_new_joiners_label: 'Neue Zuschauer mid-Saison erlauben',
+    transfers_per_viewer_label: 'Transfers pro Zuschauer',
+    end_stream_btn: 'Stream beenden', season_settings_btn: 'Saisoneinstellungen',
+    season_badge: 'SAISON',
   }
 };
 
@@ -989,6 +1149,42 @@ function getViewerScore(vname){
     }
   }
   return total;
+}
+
+// ── Season mid-roster management ─────────────────────────────────────────────
+function showAddPlayerPanel(){
+  const existing=document.getElementById('season-add-player');
+  if(existing){existing.remove();return;}
+  const panel=document.createElement('div');
+  panel.id='season-add-player';
+  panel.style.cssText='background:var(--bg3);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:14px';
+  panel.innerHTML=`
+    <div style="font-size:13px;font-weight:600;color:var(--txt);margin-bottom:10px">Add player to season squad</div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="new-player-name" class="input-field" placeholder="Player name" style="flex:2;margin-bottom:0">
+      <select id="new-player-pos" class="input-field" style="flex:1;margin-bottom:0">
+        <option value="DEF">DEF</option>
+        <option value="MID">MID</option>
+        <option value="ATT">ATT</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-accent" onclick="addSeasonPlayer()" style="font-size:12px">Add player</button>
+      <button class="btn" onclick="document.getElementById('season-add-player').remove()" style="font-size:12px">Cancel</button>
+    </div>`;
+  const scoringCard=document.getElementById('scoring-collapse');
+  if(scoringCard&&scoringCard.parentElement)scoringCard.parentElement.insertBefore(panel,scoringCard);
+}
+
+async function addSeasonPlayer(){
+  const name=sanitise(document.getElementById('new-player-name').value.trim(),60);
+  const pos=document.getElementById('new-player-pos').value;
+  if(!name){alert('Please enter a player name.');return;}
+  if(S.roster.find(p=>p.name.toLowerCase()===name.toLowerCase())){alert('Player already in squad.');return;}
+  S.roster.push({name,pos});
+  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  document.getElementById('season-add-player')?.remove();
+  renderScoring();
 }
 
 function renderScoring(){
@@ -1114,6 +1310,42 @@ function renderOAuthUser() {
   if (platEl) platEl.textContent = oauthUser.platform === 'twitch' ? 'Twitch' : 'YouTube';
   if (avatarEl && oauthUser.avatar) { avatarEl.src = oauthUser.avatar; avatarEl.style.display = 'block'; }
   if (joinBtn) { joinBtn.disabled = false; joinBtn.style.opacity = '1'; joinBtn.style.cursor = 'pointer'; joinBtn.textContent = 'Join →'; }
+  // Show "change session" link if they have a previously saved session
+  const changeRow = document.getElementById('change-session-row');
+  if (changeRow) {
+    const hasSavedCode = !!localStorage.getItem('ffm_last_viewer_code');
+    changeRow.style.display = hasSavedCode ? 'block' : 'none';
+  }
+}
+
+function viewerChangeSession() {
+  // Clear saved session code so viewer can enter a new one
+  try {
+    localStorage.removeItem('ffm_last_viewer_code');
+    localStorage.removeItem('ffm_state');
+  } catch(e) {}
+  // Reset session state but keep OAuth identity
+  S.sessionCode = null;
+  S.isLive = false;
+  S.roster = [];
+  S.events = [];
+  S.viewers = {};
+  stopAbly();
+  // Hide picker/dash, show join form
+  const joinDiv = document.getElementById('vp-join');
+  const pickerDiv = document.getElementById('vp-picker');
+  const dashDiv = document.getElementById('vp-dash');
+  if (joinDiv) joinDiv.style.display = 'block';
+  if (pickerDiv) { pickerDiv.style.display = 'none'; pickerDiv.innerHTML = ''; }
+  if (dashDiv) { dashDiv.style.display = 'none'; dashDiv.innerHTML = ''; }
+  // Clear and focus the session code input
+  const vcodeEl = document.getElementById('vcode');
+  if (vcodeEl) { vcodeEl.value = ''; vcodeEl.focus(); }
+  // Hide error
+  const err = document.getElementById('vjoin-err');
+  if (err) err.style.display = 'none';
+  setUIMode('viewer');
+  goTab('viewer', document.getElementById('nb-viewer'));
 }
 
 function clearOAuth() {
@@ -1127,6 +1359,8 @@ function clearOAuth() {
   if (btnsEl) btnsEl.style.display = 'block';
   if (manualSection) manualSection.style.display = 'block';
   if (joinBtn) { joinBtn.disabled = false; joinBtn.style.opacity = '1'; joinBtn.style.cursor = 'pointer'; joinBtn.textContent = 'Join →'; }
+  clearUIMode();
+  goTab('home', document.getElementById('nb-home'));
 }
 
 function checkOAuthReturn() {
@@ -1202,11 +1436,18 @@ async function joinGame(){
   const code=sanitise(document.getElementById('vcode').value.trim().toUpperCase(),12);
   if(!code){err.style.display='block';err.textContent=t('err_code');return;}
   const session=await db('get_session',{session_id:code});
-  if(!session||!session.is_live){
+  // For seasons, allow joining even when not live (viewers use same code between streams)
+  const sessionValid = session && (session.is_live || session.type === 'season');
+  if(!sessionValid){
     _joinAttempts++;
     if(_joinAttempts>=5){_joinBlock=Date.now()+60000;_joinAttempts=0;}
     err.style.display='block';err.textContent=t('err_not_found');return;
   }
+  // Populate season fields from session
+  S.type=session.type||'oneoff';
+  S.seasonEnd=session.season_end||null;
+  S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
+  S.transfersPerViewer=session.transfers_per_viewer||3;
   _joinAttempts=0;
   err.style.display='none';
   try{ localStorage.setItem('ffm_last_viewer_code', code); }catch(e){}
@@ -1219,9 +1460,16 @@ async function joinGame(){
   S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
   S.viewers={};
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0};});
+    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};});
   }
-  if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false};
+  if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false,transfersUsed:0};
+  // Block new viewers if season doesn't allow new joiners
+  if(S.type==='season'&&!S.allowNewJoiners&&!S.viewers[name].locked){
+    err.style.display='block';
+    err.textContent='This season is not accepting new players.';
+    S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+    return;
+  }
   // Restore any locally saved picks (in case they were picking before DB updated)
   try{
     const savedPicks=localStorage.getItem('ffm_viewer_picks_'+name);
@@ -1231,6 +1479,9 @@ async function joinGame(){
     }
   }catch(e){}
   if(S.viewers[name].locked)showDash(name);else showPicker(name);
+  const myData = S.viewers[name];
+  setUIMode(myData && myData.isMod ? 'mod' : 'viewer');
+  save();
   startPolling();
 }
 
@@ -1362,6 +1613,7 @@ function showDash(vname,updateDataset=true){
     html+=`<div class="player-row" style="margin-bottom:6px;border-color:#f5c84244;background:#1a1600"><span class="badge" style="background:#2a2200;color:#f5c842">CAP</span><span class="player-name-t" style="margin-left:4px">${picks.CAP} <span style="color:#f5c842;font-size:12px">★</span></span><span class="score-num ${capPts>0?'has-pts':''}">${capPts*2}</span></div>`;
   }
   html+=`<button class="btn" onclick="document.getElementById('vp-join').style.display='block';document.getElementById('vp-dash').style.display='none'" style="margin-top:12px;font-size:11px">Switch account</button>`;
+  html+=renderTransferUI(vname);
   panel.innerHTML=html;
 }
 
@@ -1501,11 +1753,20 @@ function renderLeague(){
   }
 }
 
+async function handleEndOrReset(){
+  if(S.type==='season'){
+    if(!confirm('End this season? This will clear all scores, picks and viewers permanently.'))return;
+    await resetAll();
+  } else {
+    await resetAll();
+  }
+}
+
 async function resetAll(){
   if(!confirm('Reset session? All scores and viewers will be cleared.'))return;
   if(S.sessionCode)await db('reset_session',{session_id:S.sessionCode});
   stopAbly();
-  S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false};
+  S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
   save();
   document.getElementById('sp-upload').style.display='block';
   document.getElementById('sp-roster').style.display='none';
@@ -1518,10 +1779,423 @@ async function resetAll(){
   document.getElementById('lg-panel').style.display='none';
   document.getElementById('squad-preview').style.display='none';
   document.getElementById('squad-file').value='';
+  const seasonBadge=document.getElementById('season-badge');
+  const seasonSettingsBtn=document.getElementById('season-settings-btn');
+  if(seasonBadge)seasonBadge.style.display='none';
+  if(seasonSettingsBtn)seasonSettingsBtn.style.display='none';
+  updateSquadTab();
+}
+
+// ── Season settings editor ───────────────────────────────────────────────────
+function showSeasonSettingsModal(){
+  const m=document.getElementById('season-settings-modal');
+  if(!m)return;
+  document.getElementById('edit-season-end').value=S.seasonEnd?S.seasonEnd.slice(0,16):'';
+  document.getElementById('edit-allow-new-joiners').checked=S.allowNewJoiners;
+  document.getElementById('edit-transfers-per-viewer').value=S.transfersPerViewer;
+  m.style.display='flex';
+}
+function hideSeasonSettingsModal(){
+  const m=document.getElementById('season-settings-modal');
+  if(m)m.style.display='none';
+}
+async function saveSeasonSettings(){
+  const allowNewJoiners=document.getElementById('edit-allow-new-joiners').checked;
+  const transfersPerViewer=parseInt(document.getElementById('edit-transfers-per-viewer').value,10);
+  if(isNaN(transfersPerViewer)||transfersPerViewer<1){alert('Transfers must be at least 1.');return;}
+  await db('update_season_settings',{session_id:S.sessionCode,season_end:null,allow_new_joiners:allowNewJoiners,transfers_per_viewer:transfersPerViewer});
+  S.allowNewJoiners=allowNewJoiners;
+  S.transfersPerViewer=transfersPerViewer;
+  hideSeasonSettingsModal();
+}
+
+// ── Squad management tab ─────────────────────────────────────────────────────
+function renderSquadManage(){
+  const list=document.getElementById('squad-manage-list');
+  if(!list)return;
+  if(!S.roster.length){list.innerHTML='<div style="font-size:13px;color:var(--txt3)">No players in squad.</div>';return;}
+  const byPos={DEF:[],MID:[],ATT:[]};
+  S.roster.forEach(p=>{if(byPos[p.pos])byPos[p.pos].push(p);});
+  list.innerHTML=['DEF','MID','ATT'].map(pos=>{
+    if(!byPos[pos].length)return'';
+    return`<div style="margin-bottom:14px">
+      <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px">${PL[pos]}</div>
+      ${byPos[pos].map(p=>`
+        <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+          ${posAvatar(p.pos,24)}
+          <span style="flex:1;font-size:13px;color:var(--txt)">${p.name}</span>
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+}
+
+async function squadAddPlayer(){
+  const nameEl=document.getElementById('squad-add-name');
+  const posEl=document.getElementById('squad-add-pos');
+  const errEl=document.getElementById('squad-add-err');
+  const name=sanitise(nameEl.value.trim(),60);
+  const pos=posEl.value;
+  errEl.style.display='none';
+  if(!name){errEl.style.display='block';errEl.textContent='Please enter a player name.';return;}
+  if(S.roster.find(p=>p.name.toLowerCase()===name.toLowerCase())){errEl.style.display='block';errEl.textContent='Player already in squad.';return;}
+  S.roster.push({name,pos});
+  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  nameEl.value='';
+  renderSquadManage();
+}
+
+
+function updateSquadTab(){
+  const card=document.getElementById('squad-mgmt-card');
+  if(card)card.style.display=S.type==='season'&&checkStreamerAuth()?'block':'none';
+}
+
+// ── Transfer UI (viewer side) ────────────────────────────────────────────────
+function renderTransferUI(vname){
+  console.log('renderTransferUI called — S.type:',S.type,'S.transfersPerViewer:',S.transfersPerViewer,'viewer:',S.viewers[vname]);
+  if(S.type!=='season')return '';
+  const v=S.viewers[vname];
+  if(!v)return '';
+  const used=v.transfersUsed||0;
+  const total=S.transfersPerViewer||3;
+  const remaining=total-used;
+  const posLabels={DEF:'Defender',MID:'Midfielder',ATT:'Attacker',CAP:'Captain (2×)'};
+  const posKeys=['DEF','MID','ATT','CAP'];
+  const posOptions=(pos)=>{
+    const filterPos=pos==='CAP'?null:pos;
+    return S.roster
+      .filter(p=>filterPos?p.pos===filterPos:true)
+      .map(p=>`<option value="${p.name}"${v.picks[pos]===p.name?' selected':''}>${p.name}</option>`)
+      .join('');
+  };
+  if(remaining<=0){
+    return `<div class="transfer-panel" style="margin-top:16px;padding:12px 14px;background:var(--bg3);border-radius:8px;border:1px solid var(--border)">
+      <div style="font-size:13px;color:var(--txt3);text-align:center">All ${total} transfers used — picks locked for this season.</div>
+    </div>`;
+  }
+  return `<div class="transfer-panel" style="margin-top:16px;padding:14px;background:var(--bg3);border-radius:8px;border:1px solid var(--accent)44">
+    <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:10px">Transfers remaining: ${remaining}/${total}</div>
+    ${posKeys.map(pos=>`
+      <div style="margin-bottom:8px">
+        <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">${posLabels[pos]}</div>
+        <select id="transfer-${pos}" style="width:100%;background:var(--bg4);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">${posOptions(pos)}</select>
+      </div>`).join('')}
+    <button class="btn btn-accent" onclick="submitTransfers('${vname}')" style="width:100%;margin-top:8px;font-size:13px">Save transfers</button>
+  </div>`;
+}
+
+async function submitTransfers(vname){
+  if(!oauthUser)return;
+  const v=S.viewers[vname];
+  if(!v)return;
+  const posKeys=['DEF','MID','ATT','CAP'];
+  const changes=[];
+  for(const pos of posKeys){
+    const el=document.getElementById('transfer-'+pos);
+    if(el&&el.value!==v.picks[pos])changes.push({pos:('pick_'+pos.toLowerCase()),newPlayer:el.value,displayPos:pos});
+  }
+  if(!changes.length){alert('No changes detected.');return;}
+  const used=v.transfersUsed||0;
+  const remaining=S.transfersPerViewer-used;
+  if(changes.length>remaining){alert(`You only have ${remaining} transfer(s) remaining but made ${changes.length} change(s). Please reduce your changes.`);return;}
+  for(const {pos,newPlayer,displayPos} of changes){
+    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer});
+    if(res&&res.error){alert('Transfer failed: '+res.error);return;}
+    // Update local state
+    v.picks[displayPos]=newPlayer;
+    v.transfersUsed=(v.transfersUsed||0)+1;
+  }
+  showDash(vname);
+}
+
+// ── Mod promotion / demotion ─────────────────────────────────────────────────
+async function promoteMod(viewerName) {
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { alert('You must be logged in as a streamer to do this.'); return; }
+  const safeName = sanitise(viewerName, 60);
+  const res = await db('promote_mod', { session_id: S.sessionCode, viewer_name: safeName, user_jwt: jwt });
+  if (res && res.error) { alert('Could not promote: ' + res.error); return; }
+  if (S.viewers[viewerName]) S.viewers[viewerName].isMod = true;
+  renderViewerList();
+}
+
+async function demoteMod(viewerName) {
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { alert('You must be logged in as a streamer to do this.'); return; }
+  const safeName = sanitise(viewerName, 60);
+  const res = await db('demote_mod', { session_id: S.sessionCode, viewer_name: safeName, user_jwt: jwt });
+  if (res && res.error) { alert('Could not demote: ' + res.error); return; }
+  if (S.viewers[viewerName]) S.viewers[viewerName].isMod = false;
+  renderViewerList();
+}
+
+function renderViewerList() {
+  const el = document.getElementById('viewer-list');
+  if (!el) return;
+  const viewers = Object.entries(S.viewers);
+  if (!viewers.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">No viewers have joined yet.</div>';
+    return;
+  }
+  el.innerHTML = viewers.map(([name, v]) => {
+    const isMod = v.isMod || false;
+    const locked = v.locked ? '🔒' : '⏳';
+    const platBadge = v.platform === 'twitch'
+      ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#9146ff22;color:#9146ff;font-family:var(--font-ui);font-weight:700;margin-left:4px">TW</span>'
+      : v.platform === 'youtube'
+        ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#ff000022;color:#ff0000;font-family:var(--font-ui);font-weight:700;margin-left:4px">YT</span>'
+        : '';
+    const modBadge = isMod ? '<span style="font-size:9px;padding:1px 6px;border-radius:3px;background:#1a1f2e;color:#f5a623;font-family:var(--font-ui);font-weight:700;margin-left:4px;border:1px solid #f5a62355">MOD</span>' : '';
+    const safeName = name.replace(/'/g, "\\'");
+    const modBtn = isMod
+      ? `<button class="evt-btn" onclick="demoteMod('${safeName}')" style="font-size:10px;color:var(--att)">Demote</button>`
+      : `<button class="evt-btn" onclick="promoteMod('${safeName}')" style="font-size:10px;color:#f5a623">Make Mod</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)">
+      <span style="font-size:13px;color:var(--txt);font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${locked} ${name}${platBadge}${modBadge}</span>
+      ${modBtn}
+    </div>`;
+  }).join('');
+}
+
+// ── Admin dashboard ──────────────────────────────────────────────────────────
+let adminRefreshInterval = null;
+
+async function adminEndSession(sessionId) {
+  if (!confirm(`Force-end session ${sessionId}? This sets it to not-live but keeps all data.`)) return;
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  const res = await db('end_stream', { session_id: sessionId, user_jwt: jwt });
+  if (res && res.error) { alert('Error: ' + res.error); return; }
+  renderAdminTab();
+}
+
+async function adminInspectSession(sessionId) {
+  const modal = document.getElementById('inspect-modal');
+  const content = document.getElementById('inspect-content');
+  if (!modal || !content) return;
+  content.innerHTML = '<div style="font-size:13px;color:var(--txt3)">Loading...</div>';
+  modal.style.display = 'flex';
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  const data = await db('admin_inspect_session', { session_id: sessionId, user_jwt: jwt });
+  if (!data || data.error) {
+    content.innerHTML = `<div style="font-size:13px;color:var(--att)">${data?.error || 'Failed to load.'}</div>`;
+    return;
+  }
+  const { session, streamer_email, streamer_channel, roster, events, viewers } = data;
+  const created = new Date(session.created_at).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  const liveBadge = session.is_live
+    ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0a200a;color:#4aff91;font-family:var(--font-ui);font-weight:700;border:1px solid #4aff9155">LIVE</span>'
+    : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700">ENDED</span>';
+  const typeBadge = session.type === 'season'
+    ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55;margin-left:4px">SEASON</span>'
+    : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700;margin-left:4px">ONE-OFF</span>';
+  const channelDisplay = streamer_channel
+    ? `<span style="color:var(--accent);font-weight:600">${streamer_channel}</span> <span style="color:var(--txt3)">(${streamer_email})</span>`
+    : `<span style="color:var(--txt2)">${streamer_email}</span>`;
+
+  // Compute scores inline (same logic as getScore)
+  const SC_local = {DEF:{goal:3,assist:3,clean_sheet:5},MID:{goal:3,assist:5,clean_sheet:3},ATT:{goal:5,assist:3,clean_sheet:1}};
+  const evtPts = {};
+  events.forEach(e => {
+    evtPts[e.player_name] = (evtPts[e.player_name] || 0) + Number(e.points);
+  });
+
+  // Leaderboard
+  const lb = viewers
+    .filter(v => v.locked)
+    .map(v => {
+      const base_pts = evtPts[v.pick_def] || 0;
+      const picks = [v.pick_def, v.pick_mid, v.pick_att];
+      let pts = picks.reduce((sum, p) => sum + (evtPts[p] || 0), 0);
+      if (v.pick_cap) pts += (evtPts[v.pick_cap] || 0); // cap 2x = +1x on top
+      return { name: v.viewer_name, pts, picks, cap: v.pick_cap, platform: v.platform, isMod: v.is_mod };
+    })
+    .sort((a, b) => b.pts - a.pts);
+
+  // By-position roster
+  const byPos = { DEF: [], MID: [], ATT: [] };
+  roster.forEach(p => { if (byPos[p.pos]) byPos[p.pos].push(p); });
+
+  const posColours = { DEF: '#4a9eff', MID: '#f5a623', ATT: '#ff5a5a' };
+
+  content.innerHTML = `
+    <!-- Header -->
+    <div style="margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border)">
+      <div style="font-size:16px;font-weight:700;color:var(--txt);margin-bottom:4px">${session.id} ${liveBadge}${typeBadge}</div>
+      <div style="font-size:13px;margin-bottom:2px">${channelDisplay}</div>
+      <div style="font-size:11px;color:var(--txt3)">${created} · ${viewers.length} viewer${viewers.length!==1?'s':''} · ${events.length} event${events.length!==1?'s':''}</div>
+      ${session.type==='season' && session.season_end ? `<div style="font-size:11px;color:#c084fc;margin-top:2px">Season ends ${new Date(session.season_end).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})}</div>` : ''}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+      <!-- LEFT: Squad + Events -->
+      <div>
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-bottom:8px">Squad (${roster.length})</div>
+        ${['DEF','MID','ATT'].map(pos => {
+          const players = byPos[pos];
+          if (!players.length) return '';
+          return `<div style="margin-bottom:10px">
+            <div style="font-size:10px;font-weight:700;color:${posColours[pos]};font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">${pos}</div>
+            ${players.map(p => {
+              const pts = evtPts[p.name] || 0;
+              return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)22">
+                <span style="color:var(--txt)">${p.name}</span>
+                ${pts ? `<span style="color:var(--accent);font-weight:700;font-family:var(--font-ui)">+${pts}</span>` : '<span style="color:var(--txt3)">0</span>'}
+              </div>`;
+            }).join('')}
+          </div>`;
+        }).join('')}
+
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-top:16px;margin-bottom:8px">Events (${events.length})</div>
+        ${events.length ? [...events].reverse().slice(0,15).map(e =>
+          `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid var(--border)22;color:var(--txt2)">
+            <span style="color:${posColours[e.pos]||'var(--txt3)'};font-weight:600">${e.player_name}</span>
+            <span style="color:var(--txt3)"> · ${e.event_type.replace(/_/g,' ')}</span>
+            <span style="color:var(--accent);font-weight:700;float:right">${Number(e.points)>0?'+':''}${e.points}</span>
+          </div>`
+        ).join('') + (events.length > 15 ? `<div style="font-size:11px;color:var(--txt3);margin-top:4px">+${events.length-15} more events</div>` : '')
+        : '<div style="font-size:12px;color:var(--txt3)">No events yet.</div>'}
+      </div>
+
+      <!-- RIGHT: Leaderboard -->
+      <div>
+        <div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin-bottom:8px">Managers (${viewers.length})</div>
+        ${viewers.length ? viewers.map(v => {
+          const isLocked = v.locked;
+          const platBadge = v.platform === 'twitch'
+            ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#9146ff22;color:#9146ff;font-family:var(--font-ui);font-weight:700;margin-left:3px">TW</span>'
+            : v.platform === 'youtube'
+              ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#ff000022;color:#ff0000;font-family:var(--font-ui);font-weight:700;margin-left:3px">YT</span>'
+              : '';
+          const modBadge = v.is_mod ? '<span style="font-size:9px;padding:1px 4px;border-radius:3px;background:#1a1f2e;color:#f5a623;font-family:var(--font-ui);font-weight:700;margin-left:3px;border:1px solid #f5a62355">MOD</span>' : '';
+          const lockIcon = isLocked ? '🔒' : '⏳';
+          const picks = [v.pick_def,v.pick_mid,v.pick_att].filter(Boolean).join(' · ') || '—';
+          const capStr = v.pick_cap ? ` · ★${v.pick_cap}` : '';
+          // Simple pts: sum of picked players' event points (cap counts double via +1x)
+          let pts = [v.pick_def, v.pick_mid, v.pick_att, v.pick_cap].filter(Boolean)
+            .reduce((sum, p) => sum + (evtPts[p] || 0), 0);
+          return `<div style="padding:7px 0;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+              <div style="font-size:12px;font-weight:600;color:var(--txt)">${lockIcon} ${v.viewer_name}${platBadge}${modBadge}</div>
+              ${isLocked ? `<div style="font-family:var(--font-ui);font-size:13px;font-weight:700;color:var(--accent)">${pts}pts</div>` : '<div style="font-size:11px;color:var(--txt3)">not locked</div>'}
+            </div>
+            <div style="font-size:11px;color:var(--txt3)">${picks}${capStr}</div>
+          </div>`;
+        }).join('')
+        : '<div style="font-size:12px;color:var(--txt3)">No viewers yet.</div>'}
+      </div>
+
+    </div>`;
+}
+
+async function renderAdminTab() {
+  const el = document.getElementById('admin-sessions-list');
+  if (!el) return;
+  el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">Loading...</div>';
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!jwt) { el.innerHTML = '<div style="font-size:13px;color:var(--att)">Not authenticated.</div>'; return; }
+  const data = await db('admin_get_sessions', { user_jwt: jwt });
+  if (!Array.isArray(data)) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--att)">' + (data && data.error ? data.error : 'Failed to load.') + '</div>';
+    return;
+  }
+  if (!data.length) { el.innerHTML = '<div style="font-size:13px;color:var(--txt3)">No sessions found.</div>'; return; }
+  const live = data.filter(s => s.is_live);
+  const notLive = data.filter(s => !s.is_live);
+  const renderRow = (s) => {
+    const created = new Date(s.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const liveBadge = s.is_live
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0a200a;color:#4aff91;font-family:var(--font-ui);font-weight:700;border:1px solid #4aff9155">LIVE</span>'
+      : '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:var(--bg3);color:var(--txt3);font-family:var(--font-ui);font-weight:700">ENDED</span>';
+    const typeBadge = s.type === 'season'
+      ? '<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#1a0a2e;color:#c084fc;font-family:var(--font-ui);font-weight:700;border:1px solid #c084fc55;margin-left:4px">SEASON</span>'
+      : '';
+    // Show channel name if set, otherwise fall back to email username
+    const channelDisplay = s.streamer_channel
+      ? `<span style="color:var(--accent);font-weight:600">${s.streamer_channel}</span> <span style="font-size:11px;color:var(--txt3)">(${s.streamer_email})</span>`
+      : (() => { const p = (s.streamer_email||'Unknown').split('@'); return p[0]+'<span style="color:var(--txt3)">@'+p[1]+'</span>'; })();
+    const endBtn = s.is_live
+      ? `<button class="evt-btn" onclick="adminEndSession('${s.id}')" style="font-size:10px;color:var(--att);white-space:nowrap;flex-shrink:0">End session</button>`
+      : '';
+    const inspectBtn = `<button class="evt-btn" onclick="adminInspectSession('${s.id}')" style="font-size:10px;color:var(--accent);white-space:nowrap;flex-shrink:0">Inspect</button>`;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:var(--txt);font-weight:600;margin-bottom:3px">${s.id} ${liveBadge}${typeBadge}</div>
+        <div style="font-size:12px;color:var(--txt2);font-family:monospace">${channelDisplay}</div>
+        <div style="font-size:11px;color:var(--txt3);margin-top:2px">${created} &middot; ${s.viewer_count} viewer${s.viewer_count !== 1 ? 's' : ''}</div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">${inspectBtn}${endBtn}</div>
+    </div>`;
+  };
+  let html = '';
+  if (live.length) {
+    html += `<div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#4aff91;margin-bottom:4px">Live (${live.length})</div>`;
+    html += live.map(renderRow).join('');
+  }
+  if (notLive.length) {
+    html += `<div style="font-family:var(--font-ui);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--txt3);margin:12px 0 4px">Recent (${notLive.length})</div>`;
+    html += notLive.map(renderRow).join('');
+  }
+  el.innerHTML = html;
+  const ts = document.getElementById('admin-last-refresh');
+  if (ts) ts.textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 let streamerAuthed = false;
+let uiMode = localStorage.getItem('ffm_ui_mode') || null; // null | 'viewer' | 'streamer'
+
+function setUIMode(mode) {
+  uiMode = mode;
+  try { localStorage.setItem('ffm_ui_mode', mode); } catch(e) {}
+  const tabs = {
+    'nb-home':     { viewer: true,  streamer: true,  mod: true  },
+    'nb-setup':    { viewer: false, streamer: true,  mod: false },
+    'nb-live':     { viewer: false, streamer: true,  mod: true  },
+    'nb-viewer':   { viewer: true,  streamer: false, mod: true  },
+    'nb-league':   { viewer: true,  streamer: true,  mod: true  },
+    'nb-streamer': { viewer: false, streamer: true,  mod: false },
+    'nb-admin':    { viewer: false, streamer: false, mod: false },
+  };
+  Object.entries(tabs).forEach(([id, vis]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const show = mode === 'viewer' ? vis.viewer : mode === 'streamer' ? vis.streamer : mode === 'mod' ? vis.mod : id === 'nb-home';
+    el.style.display = show ? '' : 'none';
+  });
+  // Admin tab: only show when streamer AND admin access_type
+  const adminTab = document.getElementById('nb-admin');
+  if(adminTab){
+    const isAdmin = mode === 'streamer' && localStorage.getItem('ffm_access_type') === 'admin';
+    adminTab.style.display = isAdmin ? '' : 'none';
+  }
+  // Update switch link
+  const switchEl = document.getElementById('mode-switch-link');
+  if (switchEl) {
+    if (mode === 'viewer') {
+      switchEl.innerHTML = 'Switch to streamer view';
+      switchEl.onclick = () => { setUIMode('streamer'); goTab('streamer', document.getElementById('nb-streamer')); };
+    } else if (mode === 'streamer') {
+      switchEl.innerHTML = 'Switch to viewer';
+      switchEl.onclick = () => { setUIMode('viewer'); goTab('viewer', document.getElementById('nb-viewer')); };
+    } else if (mode === 'mod') {
+      switchEl.innerHTML = 'Switch to viewer view';
+      switchEl.onclick = () => { setUIMode('viewer'); goTab('viewer', document.getElementById('nb-viewer')); };
+    }
+    switchEl.style.display = mode ? 'inline' : 'none';
+  }
+}
+
+function clearUIMode() {
+  uiMode = null;
+  try { localStorage.removeItem('ffm_ui_mode'); } catch(e) {}
+  ['nb-setup','nb-live','nb-viewer','nb-league','nb-streamer','nb-admin'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const switchEl = document.getElementById('mode-switch-link');
+  if (switchEl) switchEl.style.display = 'none';
+}
 
 function checkStreamerAuth() {
   return streamerAuthed === true && localStorage.getItem('ffm_streamer_authed') === 'true';
@@ -1537,17 +2211,96 @@ function requireAuth(tab, btn) {
 }
 
 function goTab(tab, btn) {
-  // Protect setup and live tabs
-  if ((tab === 'setup' || tab === 'live') && !checkStreamerAuth()) {
+  // Protect setup tab from non-streamers
+  if (tab === 'setup' && !checkStreamerAuth()) {
+    tab = 'streamer';
+    btn = document.getElementById('nb-streamer');
+  }
+  // Protect live tab: streamers and mods can access, others redirect
+  if (tab === 'live' && !checkStreamerAuth() && uiMode !== 'mod') {
     tab = 'streamer';
     btn = document.getElementById('nb-streamer');
   }
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('sec-' + tab).classList.add('active');
-  btn.classList.add('active');
+  if(btn) btn.classList.add('active');
+  if (tab === 'admin') {
+    renderAdminTab();
+    // Auto-refresh every 30s while on admin tab
+    if (adminRefreshInterval) clearInterval(adminRefreshInterval);
+    adminRefreshInterval = setInterval(renderAdminTab, 30000);
+  } else {
+    if (adminRefreshInterval) { clearInterval(adminRefreshInterval); adminRefreshInterval = null; }
+  }
   if (tab === 'league') renderLeague();
   if (tab === 'streamer') renderStreamerTab();
+  if (tab === 'admin') renderAdminTab();
+  if (tab === 'live') { updateSquadTab(); renderSquadManage(); }
+  updateSetupTabLabel();
+}
+
+function updateSetupTabLabel(){
+  const btn=document.getElementById('nb-setup');
+  if(!btn)return;
+  if(S.isLive&&S.type==='season') btn.textContent='Season Settings';
+  else if(S.isLive) btn.textContent='Session Settings';
+  else btn.textContent='Setup';
+}
+
+function formatDateDisplay(isoString){
+  if(!isoString)return'';
+  const d=new Date(isoString);
+  return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function updateDateDisplay(inputId, displayId){
+  const input=document.getElementById(inputId);
+  const display=document.getElementById(displayId);
+  if(!input||!display)return;
+  input.addEventListener('change',()=>{
+    display.textContent=input.value?'✓ '+formatDateDisplay(new Date(input.value).toISOString()):'';
+  });
+}
+
+function updateSeasonEndConfirm() {
+  const input = document.getElementById('season-end-input');
+  const display = document.getElementById('season-end-display');
+  if (!input || !display) return;
+  if (input.value) {
+    const d = new Date(input.value);
+    display.textContent = '✓ ' + d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    display.style.color = '#4aff91';
+  } else {
+    display.textContent = '';
+  }
+}
+
+// Initialise date displays
+document.addEventListener('DOMContentLoaded',()=>{
+  updateDateDisplay('season-end-input','season-end-display');
+  updateDateDisplay('edit-season-end','edit-season-end-display');
+});
+
+async function saveChannelName() {
+  const input = document.getElementById('channel-name-input');
+  const status = document.getElementById('channel-name-status');
+  const jwt = localStorage.getItem('ffm_streamer_jwt');
+  if (!input || !jwt) return;
+  const val = input.value.trim();
+  if (!val) { if (status) { status.textContent = 'Please enter a channel name.'; status.style.color = 'var(--att)'; } return; }
+  if (status) { status.textContent = 'Saving...'; status.style.color = 'var(--txt3)'; }
+  const res = await db('update_channel_name', { channel_name: val, user_jwt: jwt });
+  if (res && res.ok) {
+    localStorage.setItem('ffm_channel_name', val);
+    if (status) { status.textContent = '✓ Saved'; status.style.color = '#4aff91'; }
+    // Hide the profile banner if it was showing
+    const banner = document.getElementById('profile-banner');
+    if (banner) banner.style.display = 'none';
+    setTimeout(() => { if (status) status.textContent = ''; }, 2500);
+  } else {
+    if (status) { status.textContent = 'Error saving. Try again.'; status.style.color = 'var(--att)'; }
+  }
 }
 
 function renderStreamerTab() {
@@ -1555,11 +2308,21 @@ function renderStreamerTab() {
     document.getElementById('str-login').style.display = 'none';
     document.getElementById('str-dash').style.display = 'block';
     const accessType = localStorage.getItem('ffm_access_type');
+    const channelName = localStorage.getItem('ffm_channel_name') || '';
+    // Populate channel name input
+    const cnInput = document.getElementById('channel-name-input');
+    if (cnInput) cnInput.value = channelName;
+    // Show/hide "complete your profile" banner
+    const banner = document.getElementById('profile-banner');
+    if (banner) banner.style.display = channelName ? 'none' : 'block';
     if (accessType === 'admin') {
       document.getElementById('admin-panel').style.display = 'block';
       loadStreamers();
+      const adminTab = document.getElementById('nb-admin');
+      if (adminTab) adminTab.style.display = '';
     }
     loadTwitchChannel();
+    updateSquadTab();
   } else {
     document.getElementById('str-login').style.display = 'block';
     document.getElementById('str-dash').style.display = 'none';
@@ -1586,18 +2349,26 @@ async function streamerLogin() {
     const data = await r.json();
     if (data.error) {
       err.style.display = 'block';
-      err.textContent = data.error;
+      if (data.error === 'NEEDS_PAYMENT') {
+        err.innerHTML = 'A subscription is required to access FantasyFM. <a href="#" onclick="document.getElementById(\'checkout-section\').scrollIntoView({behavior:\'smooth\'});return false;" style="color:var(--accent);text-decoration:underline">Subscribe below →</a>';
+      } else if (data.error === 'SUBSCRIPTION_EXPIRED') {
+        err.innerHTML = 'Your subscription has expired. <a href="#" onclick="document.getElementById(\'checkout-section\').scrollIntoView({behavior:\'smooth\'});return false;" style="color:var(--accent);text-decoration:underline">Renew below →</a>';
+      } else {
+        err.textContent = data.error;
+      }
       btn.textContent = 'Sign in →';
       btn.disabled = false;
     } else {
       localStorage.setItem('ffm_streamer_authed', 'true');
       localStorage.setItem('ffm_streamer_email', data.email);
       localStorage.setItem('ffm_access_type', data.access_type || 'beta');
+      localStorage.setItem('ffm_channel_name', data.channel_name || '');
       if(data.access_token) localStorage.setItem('ffm_streamer_jwt', data.access_token);
       if(data.user_id) localStorage.setItem('ffm_streamer_uid', data.user_id);
       streamerAuthed = true;
       btn.textContent = 'Sign in →';
       btn.disabled = false;
+      setUIMode('streamer');
       renderStreamerTab();
     }
   } catch(e) {
@@ -1612,9 +2383,12 @@ function streamerLogout() {
   localStorage.removeItem('ffm_streamer_authed');
   localStorage.removeItem('ffm_streamer_email');
   localStorage.removeItem('ffm_access_type');
+  localStorage.removeItem('ffm_channel_name');
   localStorage.removeItem('ffm_streamer_jwt');
   localStorage.removeItem('ffm_streamer_uid');
   streamerAuthed = false;
+  clearUIMode();
+  goTab('home', document.getElementById('nb-home'));
   renderStreamerTab();
 }
 
@@ -2003,6 +2777,15 @@ function enlargeMatchImg(){
   if(lb&&lg){lg.src=src;lb.style.display='flex';}
 }
 
+function toggleAccessMgmt() {
+  const body = document.getElementById('access-mgmt-body');
+  const chevron = document.getElementById('access-mgmt-chevron');
+  if (!body) return;
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : 'block';
+  if (chevron) chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)';
+}
+
 function toggleScoring() {
   const col = document.getElementById('scoring-collapse');
   const chev = document.getElementById('scoring-chevron');
@@ -2173,10 +2956,18 @@ function closeModal(){
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 
 
+// Restore streamer auth state from localStorage
+if(localStorage.getItem('ffm_streamer_authed')==='true') streamerAuthed=true;
+
 load().then(() => {
   checkOAuthReturn();
   // Auto-rejoin viewer session if we have stored picks and a code
   autoRejoinViewer();
+  // Restore UI mode — but only for streamers (restoreUI sets it correctly).
+  // Viewers/mods get their mode set fresh by joinGame() so we clear stale viewer/mod modes.
+  const savedMode = localStorage.getItem('ffm_ui_mode');
+  if (savedMode === 'streamer') setUIMode('streamer');
+  else clearUIMode();
 });
 checkCheckoutReturn();
 renderRefMatchStatus();
