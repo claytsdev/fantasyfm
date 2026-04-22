@@ -31,7 +31,13 @@ exports.handler = async function(event) {
   }
 
   try {
-    const body = JSON.parse(event.body);
+    // If body is not valid JSON (e.g. Ably form-encoded requests), return 400 gracefully
+    let body;
+    try {
+      body = JSON.parse(event.body);
+    } catch(e) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) };
+    }
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
     if (body.action === 'ably_token') return await ablyToken(body.payload);
