@@ -9,7 +9,17 @@ const sbHeaders = () => ({
 });
 const sbBase = () => `${process.env.SUPABASE_URL}/rest/v1`;
 
-// Verify the Stripe webhook signature to ensure the request is genuine
+// ── Utility ──────────────────────────────────────────────────────────────────
+
+// Generate a random readable password (no ambiguous chars like 0/O/1/l)
+function generatePassword(length = 12) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes).map(b => chars[b % chars.length]).join('');
+}
+
+// ── Stripe signature verification ────────────────────────────────────────────
+
 async function verifyStripeSignature(rawBody, sigHeader, secret) {
   const encoder = new TextEncoder();
   const parts = sigHeader.split(',');
@@ -42,13 +52,225 @@ async function verifyStripeSignature(rawBody, sigHeader, secret) {
   }
 }
 
-// Grant paid access: set access_type='paid', expires_at = 31 days from now
+// ── Supabase auth helpers ─────────────────────────────────────────────────────
+
+// Check if a Supabase auth user exists for this email
+// Uses the admin API (secret key) to list users and filter by email
+async function getSupabaseAuthUser(email) {
+  const r = await fetch(
+    `${process.env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
+    {
+      headers: {
+        'apikey': process.env.SUPABASE_SECRET_KEY,
+        'Authorization': `Bearer ${process.env.SUPABASE_SECRET_KEY}`
+      }
+    }
+  );
+  const data = await r.json();
+  // Returns { users: [...] }
+  const users = data.users || [];
+  return users.find(u => u.email?.toLowerCase() === email.toLowerCase()) || null;
+}
+
+// Create a new Supabase auth user with the given email and password
+async function createSupabaseAuthUser(email, password) {
+  const r = await fetch(
+    `${process.env.SUPABASE_URL}/auth/v1/admin/users`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': process.env.SUPABASE_SECRET_KEY,
+        'Authorization': `Bearer ${process.env.SUPABASE_SECRET_KEY}`
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        email_confirm: true // Mark as confirmed so they can log in immediately
+      })
+    }
+  );
+  const data = await r.json();
+  if (!data.id) {
+    throw new Error(`Failed to create Supabase auth user: ${JSON.stringify(data)}`);
+  }
+  return data; // Returns the created user object
+}
+
+// ── Email sending via Resend ──────────────────────────────────────────────────
+
+async function sendWelcomeEmail(email, password) {
+  const loginUrl = process.env.APP_URL || 'https://fantasyfm.io';
+  const html = `
+    <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; color: #111;">
+      <h2 style="color: #6366f1;">Welcome to FantasyFM! 🎉</h2>
+      <p>Your subscription is active. Here are your login details:</p>
+      <table style="width:100%; border-collapse:collapse; margin: 16px 0;">
+        <tr>
+          <td style="padding: 8px 12px; background:#f4f4f5; border-radius:4px; font-weight:bold;">Email</td>
+          <td style="padding: 8px 12px;">${email}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; background:#f4f4f5; border-radius:4px; font-weight:bold;">Password</td>
+          <td style="padding: 8px 12px; font-family: monospace; font-size: 1.1em;">${password}</td>
+        </tr>
+      </table>
+      <p>
+        <a href="${loginUrl}" style="display:inline-block; background:#6366f1; color:#fff; padding:12px 24px; border-radius:6px; text-decoration:none; font-weight:bold;">
+          Log in to FantasyFM
+        </a>
+      </p>
+      <p style="color:#666; font-size:0.9em;">
+        You can change your password after logging in.<br>
+        Your subscription renews monthly — you'll receive a reminder before any charge.
+      </p>
+      <p style="color:#999; font-size:0.8em;">FantasyFM · fantasyfm.io</p>
+    </div>
+  `;
+
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+    },
+    body: JSON.stringify({
+      from: 'FantasyFM <welcome@fantasyfm.io>',
+      to: [email],
+      subject: 'Welcome to FantasyFM — your login details',
+      html
+    })
+  });
+
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Resend error: ${JSON.stringify(data)}`);
+  console.log(`Welcome email sent to ${email}`, data.id);
+}
+
+async function sendRenewalEmail(email) {
+  const loginUrl = process.env.APP_URL || 'https://fantasyfm.io';
+  const html = `
+    <div style="font-family: sans-serif; max-width: 520px; margin: 0 auto; color: #111;">
+      <h2 style="color: #6366f1;">FantasyFM — Access Renewed ✅</h2>
+      <p>Your FantasyFM subscription has been renewed for another month.</p>
+      <p>
+        <a href="${loginUrl}" style="display:inline-block; background:#6366f1; color:#fff; padding:12px 24px; border-radius:6px; text-decoration:none; font-weight:bold;">
+          Go to FantasyFM
+        </a>
+      </p>
+      <p style="color:#999; font-size:0.8em;">FantasyFM · fantasyfm.io</p>
+    </div>
+  `;
+
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+    },
+    body: JSON.stringify({
+      from: 'FantasyFM <welcome@fantasyfm.io>',
+      to: [email],
+      subject: 'FantasyFM — subscription renewed',
+      html
+    })
+  });
+
+  const data = await r.json();
+  if (!r.ok) throw new Error(`Resend error: ${JSON.stringify(data)}`);
+  console.log(`Renewal email sent to ${email}`, data.id);
+}
+
+// ── Core access logic ─────────────────────────────────────────────────────────
+
+// Called on checkout.session.completed — handles both new and returning streamers
+async function handleNewCheckout(email) {
+  const expires = new Date();
+  expires.setDate(expires.getDate() + 31);
+  const expiresStr = expires.toISOString();
+
+  // 1. Check streamers table
+  const checkR = await fetch(
+    `${sbBase()}/streamers?email=eq.${encodeURIComponent(email)}&select=id,access_type`,
+    { headers: sbHeaders() }
+  );
+  const existing = await checkR.json();
+
+  // 2. Check Supabase auth.users
+  const authUser = await getSupabaseAuthUser(email);
+
+  if (!authUser) {
+    // ── BRAND NEW STREAMER ──────────────────────────────────────────────────
+    console.log(`New streamer: ${email} — creating auth account`);
+
+    const password = generatePassword();
+
+    // Create auth user
+    await createSupabaseAuthUser(email, password);
+
+    if (existing.length) {
+      // Streamer row exists (e.g. was on beta/waitlist) — just update it
+      await fetch(
+        `${sbBase()}/streamers?email=eq.${encodeURIComponent(email)}`,
+        {
+          method: 'PATCH',
+          headers: sbHeaders(),
+          body: JSON.stringify({ access_type: 'paid', expires_at: expiresStr })
+        }
+      );
+    } else {
+      // Insert fresh streamers row
+      await fetch(
+        `${sbBase()}/streamers`,
+        {
+          method: 'POST',
+          headers: sbHeaders(),
+          body: JSON.stringify({ email, access_type: 'paid', expires_at: expiresStr })
+        }
+      );
+    }
+
+    // Send welcome email with credentials
+    await sendWelcomeEmail(email, password);
+    console.log(`New streamer setup complete: ${email}, expires: ${expiresStr}`);
+
+  } else {
+    // ── RETURNING / EXISTING STREAMER ───────────────────────────────────────
+    console.log(`Existing streamer: ${email} — renewing access`);
+
+    if (existing.length) {
+      await fetch(
+        `${sbBase()}/streamers?email=eq.${encodeURIComponent(email)}`,
+        {
+          method: 'PATCH',
+          headers: sbHeaders(),
+          body: JSON.stringify({ access_type: 'paid', expires_at: expiresStr })
+        }
+      );
+    } else {
+      // Auth user exists but no streamers row — insert one
+      await fetch(
+        `${sbBase()}/streamers`,
+        {
+          method: 'POST',
+          headers: sbHeaders(),
+          body: JSON.stringify({ email, access_type: 'paid', expires_at: expiresStr })
+        }
+      );
+    }
+
+    // Send renewal email (no password — they already have one)
+    await sendRenewalEmail(email);
+    console.log(`Access renewed: ${email}, expires: ${expiresStr}`);
+  }
+}
+
+// Called on invoice.payment_succeeded (monthly renewal, not first payment)
 async function grantPaidAccess(email) {
   const expires = new Date();
   expires.setDate(expires.getDate() + 31);
   const expiresStr = expires.toISOString();
 
-  // Check if streamer row exists
   const checkR = await fetch(
     `${sbBase()}/streamers?email=eq.${encodeURIComponent(email)}&select=id,access_type`,
     { headers: sbHeaders() }
@@ -56,7 +278,6 @@ async function grantPaidAccess(email) {
   const existing = await checkR.json();
 
   if (existing.length) {
-    // Update existing row
     await fetch(
       `${sbBase()}/streamers?email=eq.${encodeURIComponent(email)}`,
       {
@@ -65,9 +286,17 @@ async function grantPaidAccess(email) {
         body: JSON.stringify({ access_type: 'paid', expires_at: expiresStr })
       }
     );
-    console.log(`Updated streamer to paid: ${email}, expires: ${expiresStr}`);
+    console.log(`Renewed streamer to paid: ${email}, expires: ${expiresStr}`);
   } else {
-    console.log(`No streamer row found for ${email} — they need to sign up first`);
+    console.log(`No streamer row found for ${email} during renewal — skipping`);
+  }
+
+  // Send renewal email
+  try {
+    await sendRenewalEmail(email);
+  } catch (emailErr) {
+    // Don't fail the webhook over an email error
+    console.error(`Renewal email failed for ${email}:`, emailErr.message);
   }
 }
 
@@ -83,6 +312,8 @@ async function expireAccess(email) {
   );
   console.log(`Expired access for: ${email}`);
 }
+
+// ── Handler ───────────────────────────────────────────────────────────────────
 
 exports.handler = async function(event) {
   if (event.httpMethod !== 'POST') {
@@ -119,16 +350,15 @@ exports.handler = async function(event) {
   try {
     switch (stripeEvent.type) {
 
-      // ── Payment succeeded — grant/renew access ──────────────────────────
+      // ── First payment / new checkout ─────────────────────────────────────
       case 'checkout.session.completed': {
         const session = stripeEvent.data.object;
-        // Email is in customer_email (what we passed) or customer_details
         const email = session.customer_email || session.customer_details?.email;
-        if (email) await grantPaidAccess(email);
+        if (email) await handleNewCheckout(email);
         break;
       }
 
-      // ── Subscription renewed monthly ────────────────────────────────────
+      // ── Monthly renewal ──────────────────────────────────────────────────
       case 'invoice.payment_succeeded': {
         const invoice = stripeEvent.data.object;
         const email = invoice.customer_email;
@@ -143,7 +373,6 @@ exports.handler = async function(event) {
       case 'customer.subscription.deleted':
       case 'invoice.payment_failed': {
         const obj = stripeEvent.data.object;
-        // Need to fetch customer email from Stripe
         const custId = obj.customer;
         if (custId) {
           const custR = await fetch(`https://api.stripe.com/v1/customers/${custId}`, {
