@@ -2963,9 +2963,11 @@ load().then(() => {
   checkOAuthReturn();
   // Auto-rejoin viewer session if we have stored picks and a code
   autoRejoinViewer();
-  // UI mode is set by joinGame() / restoreUI() — don't restore blindly from localStorage
-  // as it may be stale from a previous session with different permissions
-  clearUIMode();
+  // Restore UI mode — but only for streamers (restoreUI sets it correctly).
+  // Viewers/mods get their mode set fresh by joinGame() so we clear stale viewer/mod modes.
+  const savedMode = localStorage.getItem('ffm_ui_mode');
+  if (savedMode === 'streamer') setUIMode('streamer');
+  else clearUIMode();
 });
 checkCheckoutReturn();
 renderRefMatchStatus();
