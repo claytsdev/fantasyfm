@@ -181,9 +181,12 @@ function startAbly(){
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({action: 'ably_token', payload: {session_id: S.sessionCode}})
           });
-          const data = await r.json();
-          if (data.error) { callback(data.error, null); return; }
-          callback(null, data);
+          const text = await r.text();
+          const data = JSON.parse(text);
+          // data may be the token directly or wrapped in a body string
+          const token = typeof data.body === 'string' ? JSON.parse(data.body) : data;
+          if (token.error) { callback(token.error, null); return; }
+          callback(null, token);
         } catch(e) { callback(e.message, null); }
       }
     });
