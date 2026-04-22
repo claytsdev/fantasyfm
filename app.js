@@ -1883,9 +1883,13 @@ function renderTransferUI(vname){
   const posLabels={DEF:'Defender',MID:'Midfielder',ATT:'Attacker',CAP:'Captain (2×)'};
   const posKeys=['DEF','MID','ATT','CAP'];
   const posOptions=(pos)=>{
-    const filterPos=pos==='CAP'?null:pos;
+    if(pos==='CAP'){
+      // Captain must be one of the viewer's current position picks
+      const picks=[v.picks.DEF,v.picks.MID,v.picks.ATT].filter(Boolean);
+      return picks.map(name=>`<option value="${name}"${v.picks.CAP===name?' selected':''}>${name}</option>`).join('');
+    }
     return S.roster
-      .filter(p=>filterPos?p.pos===filterPos:true)
+      .filter(p=>p.pos===pos)
       .map(p=>`<option value="${p.name}"${v.picks[pos]===p.name?' selected':''}>${p.name}</option>`)
       .join('');
   };
@@ -1916,6 +1920,17 @@ async function submitTransfers(vname){
     if(el&&el.value!==v.picks[pos])changes.push({pos:('pick_'+pos.toLowerCase()),newPlayer:el.value,displayPos:pos});
   }
   if(!changes.length){alert('No changes detected.');return;}
+  // Validate: captain must be one of the three position picks after changes applied
+  const newPicks={
+    DEF: document.getElementById('transfer-DEF')?.value||v.picks.DEF,
+    MID: document.getElementById('transfer-MID')?.value||v.picks.MID,
+    ATT: document.getElementById('transfer-ATT')?.value||v.picks.ATT,
+    CAP: document.getElementById('transfer-CAP')?.value||v.picks.CAP
+  };
+  if(![newPicks.DEF,newPicks.MID,newPicks.ATT].includes(newPicks.CAP)){
+    alert('Your captain must be one of your three picked players (Defender, Midfielder, or Attacker).');
+    return;
+  }
   const used=v.transfersUsed||0;
   const remaining=S.transfersPerViewer-used;
   if(changes.length>remaining){alert(`You only have ${remaining} transfer(s) remaining but made ${changes.length} change(s). Please reduce your changes.`);return;}
