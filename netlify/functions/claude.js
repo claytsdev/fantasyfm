@@ -19,7 +19,7 @@ async function ablyToken(payload) {
   const r = await fetch(`https://rest.ably.io/keys/${key.split(':')[0]}/requestToken`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + Buffer.from(key).toString('base64') },
-    body: JSON.stringify({ capability, ttl: 3600000, timestamp: Date.now() })
+    body: JSON.stringify({ keyName: key.split(':')[0], capability, ttl: 3600000, timestamp: Date.now() })
   });
   const token = await r.json();
   return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(token) };

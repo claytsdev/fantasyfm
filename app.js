@@ -1476,6 +1476,13 @@ async function joinGame(){
   if(Array.isArray(viewers)){
     viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};});
   }
+  // Block NEW viewers (not yet in DB) if entries are locked — returning locked viewers can still access
+  if(session.is_entries_locked && !S.viewers[name]){
+    err.style.display='block';
+    err.textContent='New entries are currently closed. Wait for the streamer to open entries.';
+    S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+    return;
+  }
   if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false,transfersUsed:0};
   // Block new viewers if season doesn't allow new joiners
   if(S.type==='season'&&!S.allowNewJoiners&&!S.viewers[name].locked){
