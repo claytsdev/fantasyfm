@@ -31,17 +31,7 @@ exports.handler = async function(event) {
   }
 
   try {
-    let body;
-    try {
-      // Netlify may base64-encode the body — decode if needed
-      const rawBody = event.isBase64Encoded
-        ? Buffer.from(event.body, 'base64').toString('utf-8')
-        : event.body;
-      body = JSON.parse(rawBody);
-    } catch(e) {
-      // Non-JSON body (e.g. Ably form-encoded) — return 400 gracefully
-      return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) };
-    }
+    const body = JSON.parse(event.body);
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
     if (body.action === 'ably_token') return await ablyToken(body.payload);
