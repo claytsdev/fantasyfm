@@ -174,21 +174,10 @@ function startAbly(){
 
   try{
     ablyClient=new Ably.Realtime({
-      authCallback: async (tokenParams, callback) => {
-        try {
-          const r = await fetch('/.netlify/functions/claude', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({action: 'ably_token', payload: {session_id: S.sessionCode}})
-          });
-          const text = await r.text();
-          const data = JSON.parse(text);
-          // data may be the token directly or wrapped in a body string
-          const token = typeof data.body === 'string' ? JSON.parse(data.body) : data;
-          if (token.error) { callback(token.error, null); return; }
-          callback(null, token);
-        } catch(e) { callback(e.message, null); }
-      }
+      authUrl:'/.netlify/functions/claude',
+      authMethod:'POST',
+      authHeaders:{'Content-Type':'application/json'},
+      authParams:{action:'ably_token',payload:{session_id:S.sessionCode}}
     });
 
     ablyClient.connection.on('failed',()=>{
