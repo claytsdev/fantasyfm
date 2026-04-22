@@ -31,11 +31,15 @@ exports.handler = async function(event) {
   }
 
   try {
-    // If body is not valid JSON (e.g. Ably form-encoded requests), return 400 gracefully
     let body;
     try {
-      body = JSON.parse(event.body);
+      // Netlify may base64-encode the body — decode if needed
+      const rawBody = event.isBase64Encoded
+        ? Buffer.from(event.body, 'base64').toString('utf-8')
+        : event.body;
+      body = JSON.parse(rawBody);
     } catch(e) {
+      // Non-JSON body (e.g. Ably form-encoded) — return 400 gracefully
       return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) };
     }
 
