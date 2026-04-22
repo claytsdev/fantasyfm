@@ -65,7 +65,8 @@ async function reloadFromDB(){
       try{ localStorage.setItem('ffm_entries_locked', entriesLocked ? '1' : '0'); }catch(e){}
     }
   }
-  S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
+  // Only overwrite roster if DB returned a valid array — never wipe on error/non-array response
+  if(Array.isArray(roster)){S.roster=roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)}));}
   // ── CRITICAL: update events so getScore() reflects latest DB state ──
   if(Array.isArray(events)){
     S.events=events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()}));

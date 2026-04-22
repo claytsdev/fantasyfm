@@ -30,8 +30,11 @@ exports.handler = async function(event) {
     return { statusCode: 405, body: 'Method not allowed' };
   }
 
+  let body;
+  try { body = JSON.parse(event.body); }
+  catch(e) { return { statusCode: 400, body: JSON.stringify({ error: 'Invalid JSON' }) }; }
+
   try {
-    const body = JSON.parse(event.body);
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
     if (body.action === 'ably_token') return await ablyToken(body.payload);
