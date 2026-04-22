@@ -1455,7 +1455,8 @@ async function joinGame(){
     }
   }catch(e){}
   if(S.viewers[name].locked)showDash(name);else showPicker(name);
-  setUIMode('viewer');
+  const myData = S.viewers[name];
+  setUIMode(myData && myData.isMod ? 'mod' : 'viewer');
   save();
   startPolling();
 }
