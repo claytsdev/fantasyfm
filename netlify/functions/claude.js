@@ -31,7 +31,22 @@ exports.handler = async function(event) {
   }
 
   try {
-    const body = JSON.parse(event.body);
+    // Handle both JSON and form-encoded bodies (Ably sends form-encoded)
+    let body;
+    const rawBody = event.body || '';
+    const contentType = (event.headers['content-type'] || '').toLowerCase();
+    console.log('DEBUG contentType:', contentType);
+    console.log('DEBUG rawBody:', rawBody.slice(0, 200));
+    const looksLikeForm = contentType.includes('urlencoded') || (rawBody.includes('=') && !rawBody.trim().startsWith('{'));
+    if (looksLikeForm) {
+      const params = new URLSearchParams(rawBody);
+      const action = params.get('action');
+      let payload = {};
+      try { payload = JSON.parse(params.get('payload') || '{}'); } catch(e) {}
+      body = { action, payload };
+    } else {
+      body = JSON.parse(rawBody);
+    }
 
     if (body.action === 'auth_login') return await handleLogin(body.payload);
     if (body.action === 'ably_token') return await ablyToken(body.payload);
