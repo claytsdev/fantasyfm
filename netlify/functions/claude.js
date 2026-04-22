@@ -90,8 +90,15 @@ async function handleLogin(payload) {
   }
 
   const streamer = streamers[0];
-  if (streamer.access_type !== 'admin' && streamer.expires_at && new Date(streamer.expires_at) < new Date()) {
-    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Your beta access has expired. Paid access is coming soon.' }) };
+
+  // Block anyone who isn't paid or admin
+  if (streamer.access_type === 'beta' || streamer.access_type === 'expired') {
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'NEEDS_PAYMENT' }) };
+  }
+
+  // Block paid accounts whose subscription has expired
+  if (streamer.access_type === 'paid' && streamer.expires_at && new Date(streamer.expires_at) < new Date()) {
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'SUBSCRIPTION_EXPIRED' }) };
   }
 
   return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ success: true, email: streamer.email, access_type: streamer.access_type, expires_at: streamer.expires_at, channel_name: streamer.channel_name || '', access_token: data.access_token, user_id: data.user.id }) };

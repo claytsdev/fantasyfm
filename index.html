@@ -496,23 +496,24 @@
         <input class="input-field" id="str-pass" type="password" placeholder="••••••••">
         <div id="str-err" style="display:none;font-size:13px;color:var(--att);margin-bottom:10px"></div>
         <button class="btn btn-accent" onclick="streamerLogin()" style="width:100%;justify-content:center;margin-bottom:16px">Sign in →</button>
-        <div style="border:1px solid var(--border);border-radius:var(--r2);background:var(--bg2);overflow:hidden">
-          <div style="padding:16px 20px;border-bottom:1px solid var(--border)">
-            <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px">🚀 Join the Waitlist</div>
-            <div style="font-size:13px;color:var(--txt2);line-height:1.5">Be first to get streamer access when we open up. Free beta spots available — no card needed.</div>
+        <div id="checkout-section" style="border:1px solid var(--border);border-radius:var(--r2);background:var(--bg2);overflow:hidden;margin-top:8px">
+          <div style="padding:20px 20px 16px;border-bottom:1px solid var(--border);text-align:center">
+            <div style="font-family:var(--font-ui);font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px">🎮 Get Streamer Access</div>
+            <div style="font-family:var(--font-ui);font-size:28px;font-weight:700;color:var(--txt);margin-bottom:4px">£5<span style="font-size:14px;font-weight:400;color:var(--txt2)">/month</span></div>
+            <div style="font-size:12px;color:var(--txt3)">Cancel anytime</div>
           </div>
-          <div id="waitlist-form" style="padding:16px 20px">
-            <input class="input-field" id="wl-name" type="text" placeholder="Your name" style="margin-bottom:8px">
-            <input class="input-field" id="wl-email" type="email" placeholder="your@email.com" style="margin-bottom:8px">
-            <input class="input-field" id="wl-twitch" type="text" placeholder="Twitch / YouTube channel (required)" style="margin-bottom:10px" required>
-            <div id="wl-err" style="display:none;font-size:12px;color:var(--att);margin-bottom:8px"></div>
-            <button class="btn btn-accent" onclick="submitWaitlist()" style="width:100%;justify-content:center">Join waitlist →</button>
-          </div>
-          <div id="waitlist-success" style="display:none;padding:16px 20px;text-align:center">
-            <div style="font-size:22px;margin-bottom:8px">🎉</div>
-            <div style="font-family:var(--font-ui);font-size:14px;font-weight:700;color:var(--accent);margin-bottom:6px">You're on the list!</div>
-            <div style="font-size:12px;color:var(--txt2);line-height:1.6;margin-bottom:4px">We'll be in touch when a spot opens up.</div>
-            <div style="font-size:11px;color:var(--txt3);line-height:1.6">If you're granted access, you'll receive an email with your login details.<br><span style="color:var(--mid)">⚠ Check your junk folder!</span></div>
+          <div style="padding:16px 20px">
+            <div style="font-size:12px;color:var(--txt2);line-height:2;margin-bottom:14px">
+              <div>✓ &nbsp;Unlimited sessions</div>
+              <div>✓ &nbsp;Squad OCR via screenshot</div>
+              <div>✓ &nbsp;Live leaderboard for viewers</div>
+              <div>✓ &nbsp;Seasons &amp; transfers</div>
+              <div>✓ &nbsp;Mod access for your team</div>
+            </div>
+            <input class="input-field" id="checkout-email" type="email" placeholder="your@email.com" style="margin-bottom:8px">
+            <div id="checkout-err" style="display:none;font-size:12px;color:var(--att);margin-bottom:8px"></div>
+            <button class="btn btn-accent" onclick="startCheckout()" style="width:100%;justify-content:center">Subscribe — £5/month →</button>
+            <div style="font-size:11px;color:var(--txt3);text-align:center;margin-top:10px">Secure payment via Stripe</div>
           </div>
         </div>
         <div id="checkout-success" style="display:none;text-align:center;padding:20px;border:1px solid var(--accent);border-radius:var(--r2);background:var(--accent-dark)">

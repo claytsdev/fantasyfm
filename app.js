@@ -2334,7 +2334,13 @@ async function streamerLogin() {
     const data = await r.json();
     if (data.error) {
       err.style.display = 'block';
-      err.textContent = data.error;
+      if (data.error === 'NEEDS_PAYMENT') {
+        err.innerHTML = 'A subscription is required to access FantasyFM. <a href="#" onclick="document.getElementById(\'checkout-section\').scrollIntoView({behavior:\'smooth\'});return false;" style="color:var(--accent);text-decoration:underline">Subscribe below →</a>';
+      } else if (data.error === 'SUBSCRIPTION_EXPIRED') {
+        err.innerHTML = 'Your subscription has expired. <a href="#" onclick="document.getElementById(\'checkout-section\').scrollIntoView({behavior:\'smooth\'});return false;" style="color:var(--accent);text-decoration:underline">Renew below →</a>';
+      } else {
+        err.textContent = data.error;
+      }
       btn.textContent = 'Sign in →';
       btn.disabled = false;
     } else {
