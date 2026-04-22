@@ -459,7 +459,12 @@ async function _goLive(type){
     sessionPayload.allow_new_joiners=S.allowNewJoiners;
     sessionPayload.transfers_per_viewer=S.transfersPerViewer;
   }
-  await db('create_session',sessionPayload);
+  const sessionResult = await db('create_session',sessionPayload);
+  if(sessionResult && sessionResult.message === 'JWT expired'){
+    alert('Your session has expired. Please log in again.');
+    streamerLogout();
+    return;
+  }
   await db('save_roster',{session_id:S.sessionCode,players:S.roster});
   save();
   document.getElementById('code-val').textContent=S.sessionCode;
