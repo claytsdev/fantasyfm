@@ -2135,7 +2135,7 @@ function setUIMode(mode) {
     'nb-home':     { viewer: true,  streamer: true,  mod: true  },
     'nb-setup':    { viewer: false, streamer: true,  mod: false },
     'nb-live':     { viewer: false, streamer: true,  mod: true  },
-    'nb-viewer':   { viewer: true,  streamer: false, mod: false },
+    'nb-viewer':   { viewer: true,  streamer: false, mod: true  },
     'nb-league':   { viewer: true,  streamer: true,  mod: true  },
     'nb-streamer': { viewer: false, streamer: true,  mod: false },
     'nb-admin':    { viewer: false, streamer: false, mod: false },
@@ -2946,10 +2946,9 @@ load().then(() => {
   checkOAuthReturn();
   // Auto-rejoin viewer session if we have stored picks and a code
   autoRejoinViewer();
-  // Restore UI mode
-  const savedMode = localStorage.getItem('ffm_ui_mode');
-  if(savedMode) setUIMode(savedMode);
-  else clearUIMode();
+  // UI mode is set by joinGame() / restoreUI() — don't restore blindly from localStorage
+  // as it may be stale from a previous session with different permissions
+  clearUIMode();
 });
 checkCheckoutReturn();
 renderRefMatchStatus();
