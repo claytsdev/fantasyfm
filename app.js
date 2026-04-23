@@ -1884,9 +1884,16 @@ function renderTransferUI(vname){
   const posKeys=['DEF','MID','ATT','CAP'];
   const posOptions=(pos)=>{
     if(pos==='CAP'){
-      // Captain must be one of the viewer's current position picks
-      const picks=[v.picks.DEF,v.picks.MID,v.picks.ATT].filter(Boolean);
-      return picks.map(name=>`<option value="${name}"${v.picks.CAP===name?' selected':''}>${name}</option>`).join('');
+      // Captain can be anyone EXCEPT the current DEF/MID/ATT selections
+      const excluded=[
+        document.getElementById('transfer-DEF')?.value||v.picks.DEF,
+        document.getElementById('transfer-MID')?.value||v.picks.MID,
+        document.getElementById('transfer-ATT')?.value||v.picks.ATT
+      ].filter(Boolean);
+      return S.roster
+        .filter(p=>!excluded.includes(p.name))
+        .map(p=>`<option value="${p.name}"${v.picks.CAP===p.name?' selected':''}>${p.name}</option>`)
+        .join('');
     }
     return S.roster
       .filter(p=>p.pos===pos)
@@ -1900,13 +1907,35 @@ function renderTransferUI(vname){
   }
   return `<div class="transfer-panel" style="margin-top:16px;padding:14px;background:var(--bg3);border-radius:8px;border:1px solid var(--accent)44">
     <div style="font-size:13px;font-weight:600;color:var(--accent);margin-bottom:10px">Transfers remaining: ${remaining}/${total}</div>
-    ${posKeys.map(pos=>`
+    ${['DEF','MID','ATT'].map(pos=>`
       <div style="margin-bottom:8px">
         <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">${posLabels[pos]}</div>
-        <select id="transfer-${pos}" style="width:100%;background:var(--bg4);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">${posOptions(pos)}</select>
+        <select id="transfer-${pos}" onchange="refreshTransferCaptainDrop('${vname}')" style="width:100%;background:var(--bg4);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">${posOptions(pos)}</select>
       </div>`).join('')}
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;color:var(--txt3);margin-bottom:3px">${posLabels['CAP']}</div>
+      <select id="transfer-CAP" style="width:100%;background:var(--bg4);color:var(--txt);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px">${posOptions('CAP')}</select>
+    </div>
     <button class="btn btn-accent" onclick="submitTransfers('${vname}')" style="width:100%;margin-top:8px;font-size:13px">Save transfers</button>
   </div>`;
+}
+
+function refreshTransferCaptainDrop(vname){
+  const v=S.viewers[vname];
+  if(!v)return;
+  const capSel=document.getElementById('transfer-CAP');
+  if(!capSel)return;
+  const currentCap=capSel.value;
+  const excluded=[
+    document.getElementById('transfer-DEF')?.value,
+    document.getElementById('transfer-MID')?.value,
+    document.getElementById('transfer-ATT')?.value
+  ].filter(Boolean);
+  const opts=S.roster
+    .filter(p=>!excluded.includes(p.name))
+    .map(p=>`<option value="${p.name}"${(currentCap===p.name&&!excluded.includes(p.name))?' selected':''}>${p.name}</option>`)
+    .join('');
+  capSel.innerHTML=opts;
 }
 
 async function submitTransfers(vname){
@@ -1914,26 +1943,38 @@ async function submitTransfers(vname){
   const v=S.viewers[vname];
   if(!v)return;
   const posKeys=['DEF','MID','ATT','CAP'];
-  const changes=[];
-  for(const pos of posKeys){
-    const el=document.getElementById('transfer-'+pos);
-    if(el&&el.value!==v.picks[pos])changes.push({pos:('pick_'+pos.toLowerCase()),newPlayer:el.value,displayPos:pos});
-  }
-  if(!changes.length){alert('No changes detected.');return;}
-  // Validate: captain must be one of the three position picks after changes applied
+  // Build new picks from dropdowns, falling back to current picks
   const newPicks={
     DEF: document.getElementById('transfer-DEF')?.value||v.picks.DEF,
     MID: document.getElementById('transfer-MID')?.value||v.picks.MID,
     ATT: document.getElementById('transfer-ATT')?.value||v.picks.ATT,
     CAP: document.getElementById('transfer-CAP')?.value||v.picks.CAP
   };
-  if(![newPicks.DEF,newPicks.MID,newPicks.ATT].includes(newPicks.CAP)){
-    alert('Your captain must be one of your three picked players (Defender, Midfielder, or Attacker).');
+  // Validate: all 4 picks must be unique players
+  const allVals=[newPicks.DEF,newPicks.MID,newPicks.ATT,newPicks.CAP].filter(Boolean);
+  const uniqueVals=new Set(allVals);
+  if(uniqueVals.size<allVals.length){
+    alert('Each position (Defender, Midfielder, Attacker, Captain) must be a different player. Please check your selections.');
     return;
   }
+  // Validate: CAP must not be the same as any positional pick
+  if([newPicks.DEF,newPicks.MID,newPicks.ATT].includes(newPicks.CAP)){
+    alert('Your captain must be a different player to your Defender, Midfielder and Attacker.');
+    return;
+  }
+  // Count how many picks have actually changed vs saved picks
+  const changes=[];
+  for(const pos of posKeys){
+    const el=document.getElementById('transfer-'+pos);
+    if(el&&el.value&&el.value!==v.picks[pos])changes.push({pos:('pick_'+pos.toLowerCase()),newPlayer:el.value,displayPos:pos});
+  }
+  if(!changes.length){alert('No changes detected.');return;}
   const used=v.transfersUsed||0;
   const remaining=S.transfersPerViewer-used;
-  if(changes.length>remaining){alert(`You only have ${remaining} transfer(s) remaining but made ${changes.length} change(s). Please reduce your changes.`);return;}
+  if(changes.length>remaining){
+    alert(`You only have ${remaining} transfer(s) remaining but made ${changes.length} change(s). Please reduce your changes.`);
+    return;
+  }
   for(const {pos,newPlayer,displayPos} of changes){
     const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer});
     if(res&&res.error){alert('Transfer failed: '+res.error);return;}
