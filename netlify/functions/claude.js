@@ -418,6 +418,10 @@ async function handleSupabase(body) {
       const r = await fetch(`${base}/events?session_id=eq.${payload.session_id}&select=player_name,pos,event_type,points,created_at&order=id.asc`, { headers });
       result = await r.json();
     }
+    else if (action === 'get_transfer_log') {
+      const r = await fetch(`${base}/transfer_log?session_id=eq.${payload.session_id}&select=oauth_id,pos,player_name,transferred_at&order=id.asc`, { headers });
+      result = await r.json();
+    }
     else if (action === 'get_session') {
       const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,is_entries_locked`, { headers });
       const sessions = await r.json();
@@ -505,6 +509,8 @@ async function handleSupabase(body) {
       // Apply
       const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
       result = await upd.json();
+      // Log the transfer with timestamp so points are only counted from this moment
+      await fetch(`${base}/transfer_log`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName }) });
       await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer' });
     }
     else if (action === 'promote_mod') {

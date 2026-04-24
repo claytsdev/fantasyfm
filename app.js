@@ -46,11 +46,12 @@ async function load(){
 
 async function reloadFromDB(){
   if(!S.sessionCode)return;
-  const [session,roster,events,viewers]=await Promise.all([
+  const [session,roster,events,viewers,transferLog]=await Promise.all([
     db('get_session',{session_id:S.sessionCode}),
     db('get_roster',{session_id:S.sessionCode}),
     db('get_events',{session_id:S.sessionCode}),
-    db('get_viewers',{session_id:S.sessionCode})
+    db('get_viewers',{session_id:S.sessionCode}),
+    db('get_transfer_log',{session_id:S.sessionCode})
   ]);
   if(session){
     S.isLive=session.is_live;
@@ -84,6 +85,18 @@ async function reloadFromDB(){
         transfersUsed:v.transfers_used||0,
         isMod:v.is_mod||false
       };
+    });
+  }
+  // Build transfer log lookup: { oauth_id: { POS: { player, ts } } }
+  S.transferLog={};
+  if(Array.isArray(transferLog)){
+    transferLog.forEach(t=>{
+      if(!S.transferLog[t.oauth_id])S.transferLog[t.oauth_id]={};
+      const ts=new Date(t.transferred_at).getTime();
+      const posKey=t.pos.replace("pick_","").toUpperCase();
+      if(!S.transferLog[t.oauth_id][posKey]||ts>S.transferLog[t.oauth_id][posKey].ts){
+        S.transferLog[t.oauth_id][posKey]={player:t.player_name,ts};
+      }
     });
   }
   // Restore any in-progress OR recently-locked picks that weren't yet saved to DB
@@ -1143,25 +1156,21 @@ function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.t
 function getViewerScore(vname){
   const v=S.viewers[vname];if(!v)return 0;
   const picks=v.picks;
-  const from=v.lockedAtTs||0; // only count events after they locked in
+  const lockedTs=v.lockedAtTs||0;
+  const oauthId=v.oauthId||null;
+  const tlog=(oauthId&&S.transferLog&&S.transferLog[oauthId])||{};
+  // Per-position fromTs: if this player was transferred in, use transfer time; else use lock time
+  const fromTs=(pos)=>{
+    const entry=tlog[pos];
+    if(entry&&entry.player===picks[pos])return entry.ts;
+    return lockedTs;
+  };
   let total=0;
-  // Base scores for DEF, MID, ATT
-  if(picks.DEF)total+=getScore(picks.DEF,from);
-  if(picks.MID)total+=getScore(picks.MID,from);
-  if(picks.ATT)total+=getScore(picks.ATT,from);
-  // Captain always scores 2x their points.
-  // Add captain score TWICE. If captain is also DEF/MID/ATT, subtract once
-  // (since their base was already counted above) so net = 2x not 3x.
-  if(picks.CAP){
-    const capScore=getScore(picks.CAP,from);
-    const capIsAlsoPick=[picks.DEF,picks.MID,picks.ATT].includes(picks.CAP);    if(capIsAlsoPick){
-      // base already counted once above, add once more = 2x total
-      total+=capScore;
-    } else {
-      // captain is a separate 4th player — add twice for 2x
-      total+=capScore*2;
-    }
-  }
+  if(picks.DEF)total+=getScore(picks.DEF,fromTs('DEF'));
+  if(picks.MID)total+=getScore(picks.MID,fromTs('MID'));
+  if(picks.ATT)total+=getScore(picks.ATT,fromTs('ATT'));
+  // Captain scores 2x. CAP is always a 4th separate player, so add twice.
+  if(picks.CAP)total+=getScore(picks.CAP,fromTs('CAP'))*2;
   return total;
 }
 
