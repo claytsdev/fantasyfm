@@ -556,17 +556,26 @@ async function handleSupabase(body) {
       const sessions = await sessionsR.json();
       // For each session fetch viewer count and streamer email
       const enriched = await Promise.all(sessions.map(async (s) => {
-        const [viewersR, streamerR] = await Promise.all([
+        const [viewersR, authUserR] = await Promise.all([
           fetch(`${base}/viewers?session_id=eq.${s.id}&select=viewer_name`, { headers }),
-          fetch(`${base}/streamers?id=eq.${s.user_id}&select=email,channel_name`, { headers })
+          fetch(`${process.env.SUPABASE_URL}/auth/v1/admin/users/${s.user_id}`, {
+            headers: { 'apikey': process.env.SUPABASE_SECRET_KEY, 'Authorization': `Bearer ${process.env.SUPABASE_SECRET_KEY}` }
+          })
         ]);
         const viewers = await viewersR.json();
-        const streamers = await streamerR.json();
+        const authUser = await authUserR.json();
+        const streamerEmail = authUser?.email || '';
+        let streamerChannel = '';
+        if (streamerEmail) {
+          const streamerR = await fetch(`${base}/streamers?email=eq.${encodeURIComponent(streamerEmail)}&select=channel_name`, { headers });
+          const streamers = await streamerR.json();
+          streamerChannel = streamers[0]?.channel_name || '';
+        }
         return {
           ...s,
           viewer_count: viewers.length,
-          streamer_email: streamers[0]?.email || 'Unknown',
-          streamer_channel: streamers[0]?.channel_name || ''
+          streamer_email: streamerEmail || 'Unknown',
+          streamer_channel: streamerChannel
         };
       }));
       result = enriched;
