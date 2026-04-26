@@ -463,22 +463,32 @@ async function startSeason(){
 }
 
 async function _goLive(type){
-  S.sessionCode=(()=>{const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='FM-';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return s;})();
-  S.isLive=true;S.type=type;S.events=[];S.viewers={};
+  const sessionCode=(()=>{const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='FM-';for(let i=0;i<6;i++)s+=chars[Math.floor(Math.random()*chars.length)];return s;})();
   const _sjwt=localStorage.getItem('ffm_streamer_jwt')||null;
-  const sessionPayload={id:S.sessionCode,user_jwt:_sjwt,type};
+  const sessionPayload={id:sessionCode,user_jwt:_sjwt,type};
   if(type==='season'){
     sessionPayload.season_end=S.seasonEnd;
     sessionPayload.allow_new_joiners=S.allowNewJoiners;
     sessionPayload.transfers_per_viewer=S.transfersPerViewer;
   }
-  const sessionResult = await db('create_session',sessionPayload);
+  let sessionResult;
+  try{ sessionResult = await db('create_session',sessionPayload); }catch(e){ sessionResult=null; }
   if(sessionResult && sessionResult.message === 'JWT expired'){
     alert('Your session has expired. Please log in again.');
     streamerLogout();
     return;
   }
-  await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  const sessionRow = Array.isArray(sessionResult) ? sessionResult[0] : sessionResult;
+  if(!sessionRow || sessionRow.error || !sessionRow.id){
+    alert('Failed to create session — could not connect to the database. Please check your connection and try again. Your session has NOT started.');
+    return;
+  }
+  S.sessionCode=sessionCode;
+  S.isLive=true;S.type=type;S.events=[];S.viewers={};
+  const rosterResult = await db('save_roster',{session_id:S.sessionCode,players:S.roster});
+  if(!rosterResult || rosterResult.error){
+    alert('Session created but roster failed to save. Please go to Setup and re-upload your squad.');
+  }
   save();
   document.getElementById('code-val').textContent=S.sessionCode;
   document.getElementById('session-pill').textContent=S.sessionCode;
