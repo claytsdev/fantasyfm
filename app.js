@@ -210,17 +210,21 @@ function startAbly(){
 
     const channelName=`ffm-${S.sessionCode}`;
     ablyChannel=ablyClient.channels.get(channelName);
+    let _reloadDebounceTimer=null;
+    const debouncedReload=()=>{
+      if(_reloadDebounceTimer)return;
+      _reloadDebounceTimer=setTimeout(async()=>{
+        _reloadDebounceTimer=null;
+        await reloadFromDB();
+        renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();renderViewerList();
+        const vdash=document.getElementById('vp-dash');
+        if(vdash&&vdash.style.display!=='none'){const vname=vdash.dataset.viewer;if(vname)showDash(vname,false);}
+      },10000);
+    };
     ablyChannel.subscribe('state_changed',async(msg)=>{
       if(!S.sessionCode)return;
-      await reloadFromDB();
-      renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
-      renderViewerList();
-      const vdash=document.getElementById('vp-dash');
-      if(vdash&&vdash.style.display!=='none'){
-        const vname=vdash.dataset.viewer;
-        if(vname)showDash(vname,false);
-      }
-      // If current viewer was just promoted/demoted, update their UI mode
+      debouncedReload();
+      // If current viewer was just promoted/demoted, update their UI mode immediately
       if(oauthUser&&(msg.data.type==='mod_promoted'||msg.data.type==='mod_demoted')){
         const vdata=S.viewers[oauthUser.username];
         if(vdata){
@@ -253,7 +257,7 @@ function startPollingFallback(){
       const vname=vdash.dataset.viewer;
       if(vname)showDash(vname,false);
     }
-  },5000);
+  },15000);
 }
 
 // Legacy alias so any remaining callsites keep working
