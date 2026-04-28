@@ -385,7 +385,10 @@ async function handleSupabase(body) {
         const ins = await fetch(`${base}/viewers`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, viewer_name: payload.viewer_name, pick_def: payload.pick_def, pick_mid: payload.pick_mid, pick_att: payload.pick_att, pick_cap: payload.pick_cap || null, locked: payload.locked, events_at_lock: payload.events_at_lock||0, platform: payload.platform || null, oauth_id: payload.oauth_id || null, avatar_url: payload.avatar_url || null, total_points: 0, transfers_used: 0 }) });
         result = await ins.json();
       }
-      await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer' });
+      // Fetch the updated viewer to include in the Ably payload
+      const updatedVR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&viewer_name=eq.${encodeURIComponent(payload.viewer_name)}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
+      const updatedV = await updatedVR.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'viewer', viewer: updatedV[0] || null });
     }
     else if (action === 'get_viewers') {
       const r = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
@@ -402,8 +405,8 @@ async function handleSupabase(body) {
       if (!payload.session_id || !payload.player_name) throw new Error('Missing required fields');
       const safeName = String(payload.player_name).replace(/[<>"'`]/g,'').slice(0,60);
       const r = await fetch(`${base}/events`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, player_name: safeName, pos: payload.pos, event_type: payload.event_type, points: pts }) });
-      result = await r.json();
-      await ablyPublish(payload.session_id, 'state_changed', { type: 'event' });
+      const eventRow = Array.isArray(result) ? result[0] : result;
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'event', event: eventRow ? { player_name: eventRow.player_name, pos: eventRow.pos, event_type: eventRow.event_type, points: eventRow.points, created_at: eventRow.created_at } : null });
     }
     else if (action === 'delete_last_event') {
       const r = await fetch(`${base}/events?session_id=eq.${payload.session_id}&order=id.desc&limit=1`, { headers });
@@ -411,7 +414,7 @@ async function handleSupabase(body) {
       if (events.length > 0) {
         await fetch(`${base}/events?id=eq.${events[0].id}`, { method: 'DELETE', headers });
         result = events[0];
-        await ablyPublish(payload.session_id, 'state_changed', { type: 'event_deleted' });
+        await ablyPublish(payload.session_id, 'state_changed', { type: 'event_deleted', event_id: events[0].id });
       } else result = null;
     }
     else if (action === 'get_events') {
@@ -460,7 +463,7 @@ async function handleSupabase(body) {
     else if (action === 'update_season_settings') {
       const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}`, { method: 'PATCH', headers, body: JSON.stringify({ season_end: payload.season_end, allow_new_joiners: payload.allow_new_joiners, transfers_per_viewer: payload.transfers_per_viewer }) });
       result = await r.json();
-      await ablyPublish(payload.session_id, 'state_changed', { type: 'season_settings' });
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'season_settings', season_end: payload.season_end, allow_new_joiners: payload.allow_new_joiners, transfers_per_viewer: payload.transfers_per_viewer });
     }
     else if (action === 'update_channel_name') {
       // Validate via JWT — streamer can only update their own channel name
@@ -510,8 +513,11 @@ async function handleSupabase(body) {
       const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
       result = await upd.json();
       // Log the transfer with timestamp so points are only counted from this moment
+      const now = new Date().toISOString();
       await fetch(`${base}/transfer_log`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName }) });
-      await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer' });
+      const tViewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
+      const tViewer = await tViewerR.json();
+      await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer', viewer: tViewer[0] || null, transfer: { oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName, transferred_at: now } });
     }
     else if (action === 'promote_mod') {
       // Verify the requesting user owns this session

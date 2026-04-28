@@ -210,28 +210,63 @@ function startAbly(){
 
     const channelName=`ffm-${S.sessionCode}`;
     ablyChannel=ablyClient.channels.get(channelName);
-    let _reloadDebounceTimer=null;
-    const debouncedReload=()=>{
-      if(_reloadDebounceTimer)return;
-      _reloadDebounceTimer=setTimeout(async()=>{
-        _reloadDebounceTimer=null;
-        await reloadFromDB();
-        renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();renderViewerList();
-        const vdash=document.getElementById('vp-dash');
-        if(vdash&&vdash.style.display!=='none'){const vname=vdash.dataset.viewer;if(vname)showDash(vname,false);}
-      },10000);
+
+    const applyViewer=(v)=>{
+      if(!v||!v.viewer_name)return;
+      S.viewers[v.viewer_name]={picks:{DEF:v.pick_def||null,MID:v.pick_mid||null,ATT:v.pick_att||null,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};
     };
+
+    const rerender=()=>{
+      renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();renderViewerList();
+      const vdash=document.getElementById('vp-dash');
+      if(vdash&&vdash.style.display!=='none'){const vname=vdash.dataset.viewer;if(vname)showDash(vname,false);}
+    };
+
+    const bgSync=setInterval(async()=>{
+      if(!S.sessionCode){clearInterval(bgSync);return;}
+      await reloadFromDB();rerender();
+    },60000);
+
     ablyChannel.subscribe('state_changed',async(msg)=>{
       if(!S.sessionCode)return;
-      debouncedReload();
-      // If current viewer was just promoted/demoted, update their UI mode immediately
-      if(oauthUser&&(msg.data.type==='mod_promoted'||msg.data.type==='mod_demoted')){
-        const vdata=S.viewers[oauthUser.username];
-        if(vdata){
-          const shouldBeMod=vdata.isMod;
+      const d=msg.data||{};
+      if(d.type==='viewer'){
+        if(d.viewer)applyViewer(d.viewer);
+        rerender();
+      }else if(d.type==='event'){
+        if(d.event){S.events.push({player:d.event.player_name,pos:d.event.pos,eventType:d.event.event_type,points:Number(d.event.points),time:new Date(d.event.created_at).toLocaleTimeString(),ts:new Date(d.event.created_at).getTime()});}
+        rerender();
+      }else if(d.type==='event_deleted'){
+        if(S.events.length>0)S.events.pop();
+        rerender();
+      }else if(d.type==='transfer'){
+        if(d.viewer)applyViewer(d.viewer);
+        if(d.transfer){
+          const{oauth_id,pos,player_name,transferred_at}=d.transfer;
+          if(!S.transferLog[oauth_id])S.transferLog[oauth_id]={};
+          const posKey=pos.replace('pick_','').toUpperCase();
+          const ts=new Date(transferred_at).getTime();
+          if(!S.transferLog[oauth_id][posKey]||ts>S.transferLog[oauth_id][posKey].ts)S.transferLog[oauth_id][posKey]={player:player_name,ts};
+        }
+        rerender();
+      }else if(d.type==='entries_lock'){
+        entriesLocked=!!d.locked;
+        _applyEntriesToggleUI();
+        try{localStorage.setItem('ffm_entries_locked',entriesLocked?'1':'0');}catch(e){}
+      }else if(d.type==='season_settings'){
+        if(d.season_end!==undefined)S.seasonEnd=d.season_end;
+        if(d.allow_new_joiners!==undefined)S.allowNewJoiners=d.allow_new_joiners;
+        if(d.transfers_per_viewer!==undefined)S.transfersPerViewer=d.transfers_per_viewer;
+      }else if(d.type==='mod_promoted'||d.type==='mod_demoted'){
+        if(d.viewer_name&&S.viewers[d.viewer_name])S.viewers[d.viewer_name].isMod=(d.type==='mod_promoted');
+        if(oauthUser&&d.viewer_name===oauthUser.username){
+          const shouldBeMod=(d.type==='mod_promoted');
           if(shouldBeMod&&uiMode!=='mod')setUIMode('mod');
           else if(!shouldBeMod&&uiMode==='mod')setUIMode('viewer');
         }
+        rerender();
+      }else{
+        await reloadFromDB();rerender();
       }
     });
   }catch(e){
