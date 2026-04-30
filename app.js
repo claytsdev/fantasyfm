@@ -234,7 +234,11 @@ function startAbly(){
         if(d.viewer)applyViewer(d.viewer);
         rerender();
       }else if(d.type==='event'){
-        if(d.event){S.events.push({player:d.event.player_name,pos:d.event.pos,eventType:d.event.event_type,points:Number(d.event.points),time:new Date(d.event.created_at).toLocaleTimeString(),ts:new Date(d.event.created_at).getTime()});}
+        if(d.event){
+          const evTs=new Date(d.event.created_at).getTime();
+          const alreadyHave=S.events.some(e=>e.player===d.event.player_name&&e.eventType===d.event.event_type&&Math.abs(e.ts-evTs)<5000);
+          if(!alreadyHave){S.events.push({player:d.event.player_name,pos:d.event.pos,eventType:d.event.event_type,points:Number(d.event.points),time:new Date(d.event.created_at).toLocaleTimeString(),ts:evTs});}
+        }
         rerender();
       }else if(d.type==='event_deleted'){
         if(S.events.length>0)S.events.pop();
@@ -1272,9 +1276,9 @@ function renderScoring(){
     byPos[pos].forEach(player=>{
       const pts=getScore(player.name);
       const row=document.createElement('div');row.className='player-row';
-      const btns=Object.entries(SC[pos]).map(([evt,p])=>`<button class="evt-btn" onclick="logEvt('${player.name}','${pos}','${evt}')">${EL[evt]} <span style="opacity:0.7">+${p}</span></button>`).join('');
-      const negBtns=`<button class="evt-btn evt-neg" onclick="logNeg('${player.name}','${pos}','yellow_card',-2)" title="Yellow card">🟨 <span style="opacity:0.7">-2</span></button><button class="evt-btn evt-neg" onclick="logNeg('${player.name}','${pos}','red_card',-5)" title="Red card">🟥 <span style="opacity:0.7">-5</span></button>`;
-      const ratingBtns=`<button class="evt-btn" onclick="logEvt('${player.name}','${pos}','rating')" style="border-color:var(--accent);color:var(--accent)" title="Rating bonus (+1/2/3 pts)">⭐ Rat</button>`;
+      const btns=Object.entries(SC[pos]).map(([evt,p])=>`<button class="evt-btn" onclick="logEvt('${player.name}','${pos}','${evt}',this)">${EL[evt]} <span style="opacity:0.7">+${p}</span></button>`).join('');
+      const negBtns=`<button class="evt-btn evt-neg" onclick="logNeg('${player.name}','${pos}','yellow_card',-2,this)" title="Yellow card">🟨 <span style="opacity:0.7">-2</span></button><button class="evt-btn evt-neg" onclick="logNeg('${player.name}','${pos}','red_card',-5,this)" title="Red card">🟥 <span style="opacity:0.7">-5</span></button>`;
+      const ratingBtns=`<button class="evt-btn" onclick="logEvt('${player.name}','${pos}','rating',this)" style="border-color:var(--accent);color:var(--accent)" title="Rating bonus (+1/2/3 pts)">⭐ Rat</button>`;
       const editBtn=`<button class="evt-btn" onclick="editScore('${player.name}','${pos}')" style="border-color:var(--txt3);color:var(--txt3)" title="Edit total score">✏️</button>`;
       row.innerHTML=`${posAvatar(pos,28)}<span class="player-name-t">${player.name}</span>${btns}${negBtns}${ratingBtns}${editBtn}<span class="score-num ${pts!==0?'has-pts':''}" id="sc-${sid(player.name)}" style="${pts<0?'color:var(--att)':pts>0?'color:var(--accent)':''}">${pts}</span>`;
       sec.appendChild(row);
@@ -1283,15 +1287,28 @@ function renderScoring(){
   });
 }
 
-async function logEvt(name,pos,evt){
+const _logEvtInFlight=new Set();
+async function logEvt(name,pos,evt,btnEl){
+  const key=name+'|'+evt;
+  if(_logEvtInFlight.has(key))return;
+  _logEvtInFlight.add(key);
+  if(btnEl)btnEl.disabled=true;
   const safeName=sanitise(name,60);const safePos=(['DEF','MID','ATT'].includes(pos)?pos:'DEF');
-  if(!SC[safePos]||!SC[safePos][evt])return;
-  await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:SC[safePos][evt]});
-  S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date().toLocaleTimeString(),ts:Date.now()});
-  const el=document.getElementById('sc-'+sid(name));
-  if(el){el.textContent=getScore(name);el.className='score-num has-pts';}
-  refreshLog();refreshStats();renderLeague();
-  announceEvent(name, evt, SC[pos][evt]);
+  if(!SC[safePos]||!SC[safePos][evt]){_logEvtInFlight.delete(key);if(btnEl)btnEl.disabled=false;return;}
+  try{
+    const result=await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:SC[safePos][evt]});
+    if(result&&result.error)throw new Error(result.error);
+    S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date().toLocaleTimeString(),ts:Date.now()});
+    const el=document.getElementById('sc-'+sid(name));
+    if(el){el.textContent=getScore(name);el.className='score-num has-pts';}
+    refreshLog();refreshStats();renderLeague();
+    announceEvent(name, evt, SC[pos][evt]);
+  }catch(e){
+    alert('Failed to log event: '+e.message);
+  }finally{
+    _logEvtInFlight.delete(key);
+    if(btnEl)btnEl.disabled=false;
+  }
 }
 
 async function editScore(name, pos){
@@ -1310,15 +1327,27 @@ async function editScore(name, pos){
   renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
 }
 
-async function logNeg(name,pos,evt,pts){
+async function logNeg(name,pos,evt,pts,btnEl){
+  const key=name+'|'+evt+'|neg';
+  if(_logEvtInFlight.has(key))return;
+  _logEvtInFlight.add(key);
+  if(btnEl)btnEl.disabled=true;
   const safeName=sanitise(name,60);const safePos=(['DEF','MID','ATT'].includes(pos)?pos:'DEF');
-  const safePts=Number(pts);if(!isFinite(safePts)||safePts>0)return;
-  await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:safePts});
-  S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date().toLocaleTimeString(),ts:Date.now()});
-  const el=document.getElementById('sc-'+sid(name));
-  if(el){const s=getScore(name);el.textContent=s;el.className='score-num'+(s>0?' has-pts':s<0?' has-pts':' ');}
-  refreshLog();refreshStats();renderLeague();
-  announceEvent(name,evt,pts);
+  const safePts=Number(pts);if(!isFinite(safePts)||safePts>0){_logEvtInFlight.delete(key);if(btnEl)btnEl.disabled=false;return;}
+  try{
+    const result=await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:safePts});
+    if(result&&result.error)throw new Error(result.error);
+    S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date().toLocaleTimeString(),ts:Date.now()});
+    const el=document.getElementById('sc-'+sid(name));
+    if(el){const s=getScore(name);el.textContent=s;el.className='score-num'+(s>0?' has-pts':s<0?' has-pts':' ');}
+    refreshLog();refreshStats();renderLeague();
+    announceEvent(name,evt,pts);
+  }catch(e){
+    alert('Failed to log event: '+e.message);
+  }finally{
+    _logEvtInFlight.delete(key);
+    if(btnEl)btnEl.disabled=false;
+  }
 }
 
 async function undoLast(){
