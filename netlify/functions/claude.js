@@ -106,14 +106,20 @@ exports.handler = async function(event) {
     });
     const openaiData = await openaiResp.json();
 
+    // Log full OpenAI response to Netlify function logs for debugging
+    console.log('[FFM Fallback] OpenAI HTTP status:', openaiResp.status);
+    console.log('[FFM Fallback] OpenAI raw response:', JSON.stringify(openaiData).slice(0, 2000));
+
     // Normalise OpenAI response shape to match Anthropic so app.js needs no changes
     if (openaiData.choices && openaiData.choices[0]) {
       const text = openaiData.choices[0].message && openaiData.choices[0].message.content ? openaiData.choices[0].message.content : '';
+      console.log('[FFM Fallback] OpenAI text (first 500 chars):', text.slice(0, 500));
       const normalised = { content: [{ type: 'text', text: text }] };
       return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(normalised) };
     }
 
     // Both providers failed
+    console.log('[FFM Fallback] OpenAI also failed, no choices in response');
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: { message: 'Both AI providers are currently unavailable. Please try again shortly.' } }) };
 
   } catch (err) {
