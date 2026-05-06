@@ -307,14 +307,35 @@ function startPolling(){ startAbly(); }
 function showManual(){S.roster=[];addBlank();document.getElementById('sp-upload').style.display='none';document.getElementById('sp-roster').style.display='block';}
 
 async function callClaude(messages,maxTokens=1200){
-  const res=await fetch('/.netlify/functions/claude',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({messages,max_tokens:maxTokens})
-  });
-  const data=await res.json();
-  if(data.error) throw new Error(data.error.message||JSON.stringify(data.error));
-  if(!data.content) throw new Error('No response from AI: '+JSON.stringify(data));
-  return data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+  const MAX_RETRIES = 2;
+  let lastErr;
+  for(let attempt=0; attempt<=MAX_RETRIES; attempt++){
+    if(attempt>0) await new Promise(r=>setTimeout(r,3000*attempt));
+    try{
+      const res=await fetch('/.netlify/functions/claude',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({messages,max_tokens:maxTokens})
+      });
+      const data=await res.json();
+      if(data.error){
+        const msg=(data.error.message||JSON.stringify(data.error)).toLowerCase();
+        const isOverload=/overload|unavailable|capacity|529|503/.test(msg);
+        if(isOverload && attempt<MAX_RETRIES){ lastErr=new Error('PROVIDER_OVERLOADED'); continue; }
+        if(isOverload) throw new Error('PROVIDER_OVERLOADED');
+        throw new Error(data.error.message||JSON.stringify(data.error));
+      }
+      if(!data.content) throw new Error('No response from AI: '+JSON.stringify(data));
+      return data.content.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim();
+    }catch(e){
+      if(e.message==='PROVIDER_OVERLOADED' && attempt<MAX_RETRIES){ lastErr=e; continue; }
+      throw e;
+    }
+  }
+  throw lastErr||new Error('PROVIDER_OVERLOADED');
+}
+
+function aiOverloadMsg(){
+  return 'Our AI provider (Anthropic) is currently experiencing high load. We automatically tried a backup provider too. Please wait a moment and try again, or enter your squad/points manually. Check <a href="https://status.claude.com" target="_blank" style="color:var(--accent)">status.claude.com</a> for updates.';
 }
 
 async function doSquadUpload(e){
@@ -357,7 +378,8 @@ Respond ONLY with JSON array, no markdown: [{"name":"Player Name","pos":"DEF","f
     document.getElementById('squad-loading').style.display='none';
     const el=document.getElementById('squad-err');
     el.style.display='block';
-    el.textContent='Could not read screenshot automatically. Try a clearer image, or enter your squad manually.';
+    const overloadMsg=err.message==='PROVIDER_OVERLOADED';
+    el.innerHTML=overloadMsg?aiOverloadMsg():'Could not read screenshot automatically. Try a clearer image, or enter your squad/points manually.';
     S.roster=[];
     document.getElementById('sp-upload').style.display='none';
     document.getElementById('sp-roster').style.display='block';
@@ -727,7 +749,8 @@ Return ONLY valid JSON, no markdown:
     document.getElementById('match-loading').style.display='none';
     const el = document.getElementById('match-err');
     el.style.display='block';
-    el.textContent='Could not read stats: '+err.message;
+    const overloadMsg=err.message==='PROVIDER_OVERLOADED';
+    el.innerHTML=overloadMsg?aiOverloadMsg():'Could not read screenshot automatically. Try a clearer image, or enter your squad/points manually. ('+err.message+')';
     console.error(err);
   }
 }

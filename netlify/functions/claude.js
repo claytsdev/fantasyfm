@@ -46,7 +46,8 @@ exports.handler = async function(event) {
     if (body.action === 'grant_and_email') return await grantAndEmail(body.payload);
     if (body.action) return await handleSupabase(body);
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    // Primary: Anthropic Claude
+    const anthropicResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -59,8 +60,62 @@ exports.handler = async function(event) {
         messages: body.messages
       })
     });
-    const data = await response.json();
-    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) };
+    const anthropicData = await anthropicResp.json();
+
+    // If Anthropic is healthy, return immediately
+    const isOverloaded = anthropicResp.status === 529 ||
+      anthropicResp.status === 500 ||
+      anthropicResp.status === 503 ||
+      (anthropicData.error && /overload|unavailable|capacity/i.test(JSON.stringify(anthropicData.error)));
+
+    if (!isOverloaded) {
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(anthropicData) };
+    }
+
+    // Fallback: OpenAI GPT-4o (only triggered on Anthropic overload/outage)
+    console.log('Anthropic overloaded, falling back to OpenAI GPT-4o');
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(anthropicData) };
+    }
+
+    // Convert Anthropic message format to OpenAI format
+    const openaiMessages = (body.messages || []).map(msg => ({
+      role: msg.role,
+      content: Array.isArray(msg.content)
+        ? msg.content.map(part => {
+            if (part.type === 'image') {
+              return { type: 'image_url', image_url: { url: 'data:' + part.source.media_type + ';base64,' + part.source.data, detail: 'high' } };
+            }
+            return part;
+          })
+        : msg.content
+    }));
+
+    const openaiResp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + openaiKey
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        max_tokens: body.max_tokens || 1200,
+        messages: openaiMessages
+      })
+    });
+    const openaiData = await openaiResp.json();
+
+    // Normalise OpenAI response shape to match Anthropic so app.js needs no changes
+    if (openaiData.choices && openaiData.choices[0]) {
+      const text = openaiData.choices[0].message && openaiData.choices[0].message.content ? openaiData.choices[0].message.content : '';
+      const normalised = { content: [{ type: 'text', text: text }] };
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(normalised) };
+    }
+
+    // Both providers failed
+    return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ error: { message: 'Both AI providers are currently unavailable. Please try again shortly.' } }) };
+
   } catch (err) {
     return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
