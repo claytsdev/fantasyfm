@@ -405,6 +405,7 @@ async function handleSupabase(body) {
       if (!payload.session_id || !payload.player_name) throw new Error('Missing required fields');
       const safeName = String(payload.player_name).replace(/[<>"'`]/g,'').slice(0,60);
       const r = await fetch(`${base}/events`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, player_name: safeName, pos: payload.pos, event_type: payload.event_type, points: pts }) });
+      result = await r.json();
       const eventRow = Array.isArray(result) ? result[0] : result;
       await ablyPublish(payload.session_id, 'state_changed', { type: 'event', event: eventRow ? { player_name: eventRow.player_name, pos: eventRow.pos, event_type: eventRow.event_type, points: eventRow.points, created_at: eventRow.created_at } : null });
     }
