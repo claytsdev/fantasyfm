@@ -63,10 +63,12 @@ exports.handler = async function(event) {
     const anthropicData = await anthropicResp.json();
 
     // If Anthropic is healthy, return immediately
+    // 401 = bad/rotated key, also triggers fallback
     const isOverloaded = anthropicResp.status === 529 ||
       anthropicResp.status === 500 ||
       anthropicResp.status === 503 ||
-      (anthropicData.error && /overload|unavailable|capacity/i.test(JSON.stringify(anthropicData.error)));
+      anthropicResp.status === 401 ||
+      (anthropicData.error && /overload|unavailable|capacity|authentication|invalid/i.test(JSON.stringify(anthropicData.error)));
 
     if (!isOverloaded) {
       return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(anthropicData) };
