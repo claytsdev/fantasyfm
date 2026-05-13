@@ -1551,6 +1551,9 @@ function checkOAuthReturn() {
 
 async function autoRejoinViewer(){
   try{
+    // Skip if streamer already has their own active session loaded
+    const myStreamerSession = localStorage.getItem('ffm_streamer_session');
+    if(checkStreamerAuth() && myStreamerSession && S.sessionCode === myStreamerSession) return;
     const oauth = localStorage.getItem('ffm_oauth');
     if(!oauth) return;
     const user = JSON.parse(oauth);
@@ -3203,9 +3206,19 @@ if(localStorage.getItem('ffm_streamer_authed')==='true') streamerAuthed=true;
 load().then(() => {
   checkOAuthReturn();
   // Auto-rejoin viewer session if we have stored picks and a code
-  autoRejoinViewer();
-  // Restore UI mode — but only for streamers (restoreUI sets it correctly).
-  // Viewers/mods get their mode set fresh by joinGame() so we clear stale viewer/mod modes.
+  autoRejoinViewer().then(()=>{
+    // If streamer is logged in but viewer auto-join loaded someone else's session,
+    // show the rejoin panel pre-filled with their own session code
+    const myStreamerSession=localStorage.getItem('ffm_streamer_session');
+    if(checkStreamerAuth()&&myStreamerSession&&S.sessionCode!==myStreamerSession){
+      const rp=document.getElementById('sp-rejoin');
+      if(rp){
+        rp.style.display='block';
+        const inp=document.getElementById('rejoin-code-input');
+        if(inp)inp.value=myStreamerSession;
+      }
+    }
+  });
   const savedMode = localStorage.getItem('ffm_ui_mode');
   if (savedMode === 'streamer') setUIMode('streamer');
   else clearUIMode();
