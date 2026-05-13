@@ -1765,15 +1765,14 @@ function showDash(vname,updateDataset=true){
       <div style="font-size:11px;color:var(--txt3);font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px">pts</div>
     </div>
   </div>`;
-  const _tlog=(v.oauthId&&S.transferLog&&S.transferLog[v.oauthId])||{};
-  const _fromTs=(pos)=>{const e=_tlog[pos];return(e&&e.player===picks[pos])?e.ts:(v.lockedAtTs||0);};
+  const _fromTs=()=>v.lockedAtTs||0;
   ['DEF','MID','ATT'].forEach(pos=>{
-    const pname=picks[pos];const pts=pname?getScore(pname,_fromTs(pos)):0;
+    const pname=picks[pos];const pts=pname?getScore(pname,_fromTs()):0;
     const isCap=pname&&picks.CAP===pname;
     html+=`<div class="player-row" style="margin-bottom:6px"><span class="badge b-${pos}">${posN[pos]}</span><span class="player-name-t" style="margin-left:4px">${pname||'&mdash;'}${isCap?'<span style="color:#f5c842;margin-left:6px;font-size:12px">★ CAP</span>':''}</span><span class="score-num ${pts>0?'has-pts':''}">${pts}</span>${isCap?'<span style="font-size:10px;color:#f5c842;margin-left:4px;font-family:var(--font-ui);font-weight:700">×2</span>':''}</div>`;
   });
   if(picks.CAP&&picks.CAP!==picks.DEF&&picks.CAP!==picks.MID&&picks.CAP!==picks.ATT){
-    const capPts=getScore(picks.CAP,_fromTs('CAP'));
+    const capPts=getScore(picks.CAP,_fromTs());
     html+=`<div class="player-row" style="margin-bottom:6px;border-color:#f5c84244;background:#1a1600"><span class="badge" style="background:#2a2200;color:#f5c842">CAP</span><span class="player-name-t" style="margin-left:4px">${picks.CAP} <span style="color:#f5c842;font-size:12px">★</span></span><span class="score-num ${capPts>0?'has-pts':''}">${capPts*2}</span></div>`;
   }
   html+=`<button class="btn" onclick="document.getElementById('vp-join').style.display='block';document.getElementById('vp-dash').style.display='none'" style="margin-top:12px;font-size:11px">Switch account</button>`;
@@ -2121,15 +2120,21 @@ async function submitTransfers(vname){
     return;
   }
   for(const {pos,newPlayer,displayPos} of changes){
-    // Send current score so server can bank it before applying transfer
-    const currentScore=getViewerScore(vname);
-    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer,current_score:currentScore});
+    // Score must be calculated using current lockedAtTs BEFORE the transfer resets it
+    const scoreNow=(
+      (v.bankedPoints||0)+
+      getScore(v.picks.DEF||'',v.lockedAtTs||0)+
+      getScore(v.picks.MID||'',v.lockedAtTs||0)+
+      getScore(v.picks.ATT||'',v.lockedAtTs||0)+
+      getScore(v.picks.CAP||'',v.lockedAtTs||0)*2
+    );
+    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer,current_score:scoreNow});
     if(res&&res.error){alert('Transfer failed: '+res.error);return;}
-    // Update local state including banked points and new lock timestamp
+    // Update local state from server response
     v.picks[displayPos]=newPlayer;
     v.transfersUsed=(v.transfersUsed||0)+1;
-    v.bankedPoints=currentScore;
-    v.lockedAtTs=Date.now();
+    v.bankedPoints=scoreNow;
+    v.lockedAtTs=res&&res.events_at_lock?res.events_at_lock:Date.now();
   }
   showDash(vname);
 }
