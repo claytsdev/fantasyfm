@@ -486,7 +486,7 @@ async function handleSupabase(body) {
       result = await r.json();
     }
     else if (action === 'get_transfer_log') {
-      const r = await fetch(`${base}/transfer_log?session_id=eq.${payload.session_id}&select=oauth_id,pos,player_name,transferred_at&order=id.asc`, { headers });
+      const r = await fetch(`${base}/transfer_log?session_id=eq.${payload.session_id}&select=oauth_id,pos,player_name,transferred_at,is_outgoing&order=id.asc`, { headers });
       result = await r.json();
     }
     else if (action === 'get_session') {
@@ -577,18 +577,23 @@ async function handleSupabase(body) {
       const sessions = await sessionR.json();
       const session = sessions[0];
       if (!session || session.type !== 'season') throw new Error('Transfers only available in season mode');
-      // Fetch viewer
-      const viewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=transfers_used`, { headers });
+      // Fetch viewer including current pick so we can log the outgoing player
+      const viewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=transfers_used,pick_def,pick_mid,pick_att,pick_cap`, { headers });
       const viewers = await viewerR.json();
       const viewer = viewers[0];
       if (!viewer) throw new Error('Viewer not found');
       if (viewer.transfers_used >= session.transfers_per_viewer) throw new Error('No transfers remaining');
-      // Apply
+      // Capture outgoing player before applying the update
+      const outgoingPlayer = viewer[payload.pos] || null;
+      const now = new Date().toISOString();
+      // Apply transfer
       const upd = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}`, { method: 'PATCH', headers, body: JSON.stringify({ [payload.pos]: safeName, transfers_used: viewer.transfers_used + 1 }) });
       result = await upd.json();
-      // Log the transfer with timestamp so points are only counted from this moment
-      const now = new Date().toISOString();
-      await fetch(`${base}/transfer_log`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName }) });
+      // Log outgoing player first (banks their points up to now), then log incoming player
+      if (outgoingPlayer && outgoingPlayer !== safeName) {
+        await fetch(`${base}/transfer_log`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, oauth_id: payload.oauth_id, pos: payload.pos, player_name: outgoingPlayer, transferred_at: now, is_outgoing: true }) });
+      }
+      await fetch(`${base}/transfer_log`, { method: 'POST', headers, body: JSON.stringify({ session_id: payload.session_id, oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName, transferred_at: now, is_outgoing: false }) });
       const tViewerR = await fetch(`${base}/viewers?session_id=eq.${payload.session_id}&oauth_id=eq.${encodeURIComponent(payload.oauth_id)}&select=viewer_name,pick_def,pick_mid,pick_att,pick_cap,locked,total_points,platform,oauth_id,avatar_url,events_at_lock,transfers_used,is_mod`, { headers });
       const tViewer = await tViewerR.json();
       await ablyPublish(payload.session_id, 'state_changed', { type: 'transfer', viewer: tViewer[0] || null, transfer: { oauth_id: payload.oauth_id, pos: payload.pos, player_name: safeName, transferred_at: now } });

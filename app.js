@@ -123,13 +123,13 @@ async function reloadFromDB(){
   // Build transfer log lookup: { oauth_id: { POS: { player, ts } } }
   S.transferLog={};
   if(Array.isArray(transferLog)){
-    // Store full ordered history per position so we can bank points from outgoing players
+    // Store full ordered history per position, including is_outgoing flag
     transferLog.forEach(t=>{
       if(!S.transferLog[t.oauth_id])S.transferLog[t.oauth_id]={};
       const ts=new Date(t.transferred_at).getTime();
       const posKey=t.pos.replace('pick_','').toUpperCase();
       if(!S.transferLog[t.oauth_id][posKey])S.transferLog[t.oauth_id][posKey]=[];
-      S.transferLog[t.oauth_id][posKey].push({player:t.player_name,ts});
+      S.transferLog[t.oauth_id][posKey].push({player:t.player_name,ts,isOutgoing:!!t.is_outgoing});
     });
     Object.values(S.transferLog).forEach(pm=>Object.keys(pm).forEach(p=>pm[p].sort((a,b)=>a.ts-b.ts)));
   }
@@ -285,7 +285,7 @@ function startAbly(){
           const posKey=pos.replace('pick_','').toUpperCase();
           const ts=new Date(transferred_at).getTime();
           if(!S.transferLog[oauth_id][posKey])S.transferLog[oauth_id][posKey]=[];
-          S.transferLog[oauth_id][posKey].push({player:player_name,ts});
+          S.transferLog[oauth_id][posKey].push({player:player_name,ts,isOutgoing:false});
           S.transferLog[oauth_id][posKey].sort((a,b)=>a.ts-b.ts);
         }
         rerender();
@@ -1272,18 +1272,24 @@ function getViewerScore(vname){
   const lockedTs=v.lockedAtTs||0;
   const oauthId=v.oauthId||null;
   const posHistory=(oauthId&&S.transferLog&&S.transferLog[oauthId])||{};
-  // scoreForPos: walk full transfer history for a position.
-  // Each outgoing player banks points earned during their window.
-  // Current player scores from their transfer-in time onwards.
+  // scoreForPos: use outgoing/incoming pairs to build exact scoring windows.
+  // Outgoing entry = player left, score them from windowStart to entry.ts
+  // Incoming entry = new player arrived, update windowStart
   function scoreForPos(pos,currentPick,multiplier){
     if(!currentPick)return 0;
     const history=posHistory[pos]||[];
+    if(!history.length)return getScore(currentPick,lockedTs)*multiplier;
     let pts=0;
-    history.forEach((entry,i)=>{
-      const nextTs=i<history.length-1?history[i+1].ts:Infinity;
-      if(entry.player!==currentPick)pts+=getScoreWindow(entry.player,entry.ts,nextTs);
+    let windowStart=lockedTs;
+    history.forEach(entry=>{
+      if(entry.isOutgoing){
+        pts+=getScoreWindow(entry.player,windowStart,entry.ts);
+      } else {
+        windowStart=entry.ts;
+      }
     });
-    const currentStart=history.length>0?history[history.length-1].ts:lockedTs;
+    const lastIncoming=history.filter(e=>!e.isOutgoing);
+    const currentStart=lastIncoming.length>0?lastIncoming[lastIncoming.length-1].ts:lockedTs;
     pts+=getScore(currentPick,currentStart)*multiplier;
     return pts;
   }
@@ -1779,11 +1785,8 @@ function showDash(vname,updateDataset=true){
       <div style="font-size:11px;color:var(--txt3);font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px">pts</div>
     </div>
   </div>`;
-  const _posHistory=(v.oauthId&&S.transferLog&&S.transferLog[v.oauthId])||{};
-  const _fromTs=(pos)=>{
-    const history=_posHistory[pos]||[];
-    return history.length>0?history[history.length-1].ts:(v.lockedAtTs||0);
-  };
+  const _tlog=(v.oauthId&&S.transferLog&&S.transferLog[v.oauthId])||{};
+  const _fromTs=(pos)=>{const e=_tlog[pos];return(e&&e.player===picks[pos])?e.ts:(v.lockedAtTs||0);};
   ['DEF','MID','ATT'].forEach(pos=>{
     const pname=picks[pos];const pts=pname?getScore(pname,_fromTs(pos)):0;
     const isCap=pname&&picks.CAP===pname;

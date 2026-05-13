@@ -275,6 +275,7 @@ async function fetchData() {
     const viewers = await viewersRes.json();
     if (!Array.isArray(events) || !Array.isArray(viewers)) return;
 
+<<<<<<< HEAD
     // Build full ordered transfer history per position
     const tlog = {};
     if (Array.isArray(transferLog)) {
@@ -283,11 +284,17 @@ async function fetchData() {
         const ts = new Date(t.transferred_at).getTime();
         const pos = t.pos.replace('pick_', '').toUpperCase();
         if (!tlog[t.oauth_id][pos]) tlog[t.oauth_id][pos] = [];
-        tlog[t.oauth_id][pos].push({ player: t.player_name, ts });
+        tlog[t.oauth_id][pos].push({ player: t.player_name, ts, isOutgoing: !!t.is_outgoing });
       });
       Object.values(tlog).forEach(pm => Object.keys(pm).forEach(p => pm[p].sort((a,b) => a.ts - b.ts)));
     }
 
+=======
+    // Build per-player score filtered by a lock timestamp.
+    // Mirrors getScore(name, fromTs) in index.html — only events AFTER the
+    // viewer locked their picks are counted, so late joiners aren't rewarded
+    // for goals that happened before they joined.
+>>>>>>> parent of 0b3bdda (overlay fix)
     function getScore(name, fromTs = 0) {
       return events
         .filter(e => e.player_name === name && new Date(e.created_at).getTime() > fromTs)
@@ -299,17 +306,24 @@ async function fetchData() {
         .reduce((s, e) => s + Number(e.points), 0);
     }
 
-    // scoreForPos: walk full history, banking points from outgoing players
+<<<<<<< HEAD
+    // scoreForPos: use outgoing/incoming pairs to build exact scoring windows
     function scoreForPos(v, pos, currentPick, multiplier) {
       if (!currentPick) return 0;
       const lockedTs = v.events_at_lock || 0;
       const history = (v.oauth_id && tlog[v.oauth_id] && tlog[v.oauth_id][pos]) || [];
+      if (!history.length) return getScore(currentPick, lockedTs) * multiplier;
       let pts = 0;
-      history.forEach((entry, i) => {
-        const nextTs = i < history.length - 1 ? history[i + 1].ts : Infinity;
-        if (entry.player !== currentPick) pts += getScoreWindow(entry.player, entry.ts, nextTs);
+      let windowStart = lockedTs;
+      history.forEach(entry => {
+        if (entry.isOutgoing) {
+          pts += getScoreWindow(entry.player, windowStart, entry.ts);
+        } else {
+          windowStart = entry.ts;
+        }
       });
-      const currentStart = history.length > 0 ? history[history.length - 1].ts : lockedTs;
+      const lastIncoming = history.filter(e => !e.isOutgoing);
+      const currentStart = lastIncoming.length > 0 ? lastIncoming[lastIncoming.length - 1].ts : lockedTs;
       pts += getScore(currentPick, currentStart) * multiplier;
       return pts;
     }
@@ -322,6 +336,18 @@ async function fetchData() {
         pts += scoreForPos(v, 'MID', v.pick_mid, 1);
         pts += scoreForPos(v, 'ATT', v.pick_att, 1);
         pts += scoreForPos(v, 'CAP', v.pick_cap, 2);
+=======
+    const leaderboard = viewers
+      .filter(v => v.locked)
+      .map(v => {
+        const from = v.events_at_lock || 0;
+        let pts = getScore(v.pick_def, from) + getScore(v.pick_mid, from) + getScore(v.pick_att, from);
+        if (v.pick_cap) {
+          const capBase = getScore(v.pick_cap, from);
+          const isAlso = v.pick_cap===v.pick_def || v.pick_cap===v.pick_mid || v.pick_cap===v.pick_att;
+          pts += isAlso ? capBase : capBase * 2;
+        }
+>>>>>>> parent of 0b3bdda (overlay fix)
         return { name: v.viewer_name, pts, cap: v.pick_cap||null, platform: v.platform||'manual' };
       })
       .sort((a, b) => b.pts - a.pts)
