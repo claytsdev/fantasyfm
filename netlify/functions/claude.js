@@ -494,6 +494,16 @@ async function handleSupabase(body) {
       const sessions = await r.json();
       result = sessions[0] || null;
     }
+    else if (action === 'rejoin_session') {
+      // Like get_session but verifies the requesting streamer owns the session
+      if (!payload.user_jwt) throw new Error('Authentication required');
+      const jwtPayload = JSON.parse(Buffer.from(payload.user_jwt.split('.')[1], 'base64').toString());
+      const r = await fetch(`${base}/sessions?id=eq.${payload.session_id}&select=id,is_live,type,season_end,allow_new_joiners,transfers_per_viewer,is_entries_locked,user_id`, { headers });
+      const sessions = await r.json();
+      if (!sessions[0]) { result = null; }
+      else if (sessions[0].user_id !== jwtPayload.sub) { throw new Error('You do not own this session.'); }
+      else { const { user_id, ...sessionData } = sessions[0]; result = sessionData; }
+    }
     else if (action === 'add_waitlist') {
       // Check for duplicate
       const check = await fetch(`${base}/waitlist?email=eq.${encodeURIComponent(payload.email)}&select=id`, { headers });

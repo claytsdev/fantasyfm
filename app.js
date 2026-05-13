@@ -55,7 +55,9 @@ async function rejoinSession(){
   if(!code){status.style.color='var(--att)';status.textContent='Please enter a session code.';return;}
   status.style.color='var(--txt3)';status.textContent='Looking up session…';
   try{
-    const session=await db('get_session',{session_id:code});
+    const jwt=localStorage.getItem('ffm_streamer_jwt');
+    if(!jwt){status.style.color='var(--att)';status.textContent='You must be logged in as a streamer to rejoin a session.';return;}
+    const session=await db('rejoin_session',{session_id:code,user_jwt:jwt});
     if(!session||!session.id){
       status.style.color='var(--att)';status.textContent='Session not found. Check the code and try again.';
       return;
