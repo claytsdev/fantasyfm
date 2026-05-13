@@ -70,6 +70,7 @@ async function rejoinSession(){
     S.transfersPerViewer=session.transfers_per_viewer||3;
     await reloadFromDB();
     save();
+    try{localStorage.setItem('ffm_streamer_session',session.id);}catch(e){}
     document.getElementById('sp-rejoin').style.display='none';
     restoreUI();
   }catch(e){
@@ -587,6 +588,7 @@ async function _goLive(type){
   }
   S.sessionCode=sessionCode;
   S.isLive=true;S.type=type;S.events=[];S.viewers={};
+  try{localStorage.setItem('ffm_streamer_session',sessionCode);}catch(e){}
   const rosterResult = await db('save_roster',{session_id:S.sessionCode,players:S.roster});
   if(!rosterResult || rosterResult.error){
     alert('Session created but roster failed to save. Please go to Setup and re-upload your squad.');
@@ -1930,6 +1932,7 @@ async function resetAll(){
   if(S.sessionCode)await db('reset_session',{session_id:S.sessionCode});
   stopAbly();
   S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+  try{localStorage.removeItem('ffm_streamer_session');}catch(e){}
   save();
   document.getElementById('sp-upload').style.display='block';
   document.getElementById('sp-roster').style.display='none';
@@ -2442,15 +2445,21 @@ function requireAuth(tab, btn) {
 }
 
 function goTab(tab, btn) {
-  // Protect setup tab from non-streamers
-  if (tab === 'setup' && !checkStreamerAuth()) {
-    tab = 'streamer';
-    btn = document.getElementById('nb-streamer');
+  // Protect setup tab: only the session owner
+  if (tab === 'setup') {
+    const mySession = localStorage.getItem('ffm_streamer_session');
+    if (!checkStreamerAuth() || (S.sessionCode && mySession !== S.sessionCode)) {
+      tab = 'streamer';
+      btn = document.getElementById('nb-streamer');
+    }
   }
-  // Protect live tab: streamers and mods can access, others redirect
-  if (tab === 'live' && !checkStreamerAuth() && uiMode !== 'mod') {
-    tab = 'streamer';
-    btn = document.getElementById('nb-streamer');
+  // Protect live tab: only the session owner or mods can access
+  if (tab === 'live' && uiMode !== 'mod') {
+    const mySession = localStorage.getItem('ffm_streamer_session');
+    if (!checkStreamerAuth() || !mySession || mySession !== S.sessionCode) {
+      tab = 'streamer';
+      btn = document.getElementById('nb-streamer');
+    }
   }
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
@@ -2617,6 +2626,7 @@ function streamerLogout() {
   localStorage.removeItem('ffm_channel_name');
   localStorage.removeItem('ffm_streamer_jwt');
   localStorage.removeItem('ffm_streamer_uid');
+  localStorage.removeItem('ffm_streamer_session');
   streamerAuthed = false;
   clearUIMode();
   goTab('home', document.getElementById('nb-home'));
