@@ -261,7 +261,7 @@ let prevScores = {};
 async function fetchData() {
   if (!SESSION) return;
   try {
-    const [eventsRes, viewersRes, transferRes] = await Promise.all([
+    const [eventsRes, viewersRes] = await Promise.all([
       fetch('/.netlify/functions/claude', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({action:'get_events', payload:{session_id:SESSION}})
@@ -269,15 +269,10 @@ async function fetchData() {
       fetch('/.netlify/functions/claude', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({action:'get_viewers', payload:{session_id:SESSION}})
-      }),
-      fetch('/.netlify/functions/claude', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({action:'get_transfer_log', payload:{session_id:SESSION}})
       })
     ]);
     const events = await eventsRes.json();
     const viewers = await viewersRes.json();
-    const transferLog = await transferRes.json();
     if (!Array.isArray(events) || !Array.isArray(viewers)) return;
 
     // Build full ordered transfer history per position

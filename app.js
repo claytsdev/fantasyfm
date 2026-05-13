@@ -1779,8 +1779,11 @@ function showDash(vname,updateDataset=true){
       <div style="font-size:11px;color:var(--txt3);font-family:var(--font-ui);text-transform:uppercase;letter-spacing:0.5px">pts</div>
     </div>
   </div>`;
-  const _tlog=(v.oauthId&&S.transferLog&&S.transferLog[v.oauthId])||{};
-  const _fromTs=(pos)=>{const e=_tlog[pos];return(e&&e.player===picks[pos])?e.ts:(v.lockedAtTs||0);};
+  const _posHistory=(v.oauthId&&S.transferLog&&S.transferLog[v.oauthId])||{};
+  const _fromTs=(pos)=>{
+    const history=_posHistory[pos]||[];
+    return history.length>0?history[history.length-1].ts:(v.lockedAtTs||0);
+  };
   ['DEF','MID','ATT'].forEach(pos=>{
     const pname=picks[pos];const pts=pname?getScore(pname,_fromTs(pos)):0;
     const isCap=pname&&picks.CAP===pname;
