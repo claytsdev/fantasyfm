@@ -123,14 +123,15 @@ async function reloadFromDB(){
   // Build transfer log lookup: { oauth_id: { POS: { player, ts } } }
   S.transferLog={};
   if(Array.isArray(transferLog)){
+    // Store full ordered history per position so we can bank points from outgoing players
     transferLog.forEach(t=>{
       if(!S.transferLog[t.oauth_id])S.transferLog[t.oauth_id]={};
       const ts=new Date(t.transferred_at).getTime();
-      const posKey=t.pos.replace("pick_","").toUpperCase();
-      if(!S.transferLog[t.oauth_id][posKey]||ts>S.transferLog[t.oauth_id][posKey].ts){
-        S.transferLog[t.oauth_id][posKey]={player:t.player_name,ts};
-      }
+      const posKey=t.pos.replace('pick_','').toUpperCase();
+      if(!S.transferLog[t.oauth_id][posKey])S.transferLog[t.oauth_id][posKey]=[];
+      S.transferLog[t.oauth_id][posKey].push({player:t.player_name,ts});
     });
+    Object.values(S.transferLog).forEach(pm=>Object.keys(pm).forEach(p=>pm[p].sort((a,b)=>a.ts-b.ts)));
   }
   // Restore any in-progress OR recently-locked picks that weren't yet saved to DB
   Object.keys(prevViewers).forEach(name=>{
@@ -283,7 +284,9 @@ function startAbly(){
           if(!S.transferLog[oauth_id])S.transferLog[oauth_id]={};
           const posKey=pos.replace('pick_','').toUpperCase();
           const ts=new Date(transferred_at).getTime();
-          if(!S.transferLog[oauth_id][posKey]||ts>S.transferLog[oauth_id][posKey].ts)S.transferLog[oauth_id][posKey]={player:player_name,ts};
+          if(!S.transferLog[oauth_id][posKey])S.transferLog[oauth_id][posKey]=[];
+          S.transferLog[oauth_id][posKey].push({player:player_name,ts});
+          S.transferLog[oauth_id][posKey].sort((a,b)=>a.ts-b.ts);
         }
         rerender();
       }else if(d.type==='entries_lock'){
@@ -1262,24 +1265,33 @@ function applyLang(){
 
 function sid(n){return n.replace(/[^a-zA-Z0-9]/g,'_');}
 function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.ts||0)>fromTs).reduce((s,e)=>s+Number(e.points),0);}
+function getScoreWindow(name,fromTs,toTs){return S.events.filter(e=>e.player===name&&(e.ts||0)>fromTs&&(e.ts||0)<=toTs).reduce((s,e)=>s+Number(e.points),0);}
 function getViewerScore(vname){
   const v=S.viewers[vname];if(!v)return 0;
   const picks=v.picks;
   const lockedTs=v.lockedAtTs||0;
   const oauthId=v.oauthId||null;
-  const tlog=(oauthId&&S.transferLog&&S.transferLog[oauthId])||{};
-  // Per-position fromTs: if this player was transferred in, use transfer time; else use lock time
-  const fromTs=(pos)=>{
-    const entry=tlog[pos];
-    if(entry&&entry.player===picks[pos])return entry.ts;
-    return lockedTs;
-  };
+  const posHistory=(oauthId&&S.transferLog&&S.transferLog[oauthId])||{};
+  // scoreForPos: walk full transfer history for a position.
+  // Each outgoing player banks points earned during their window.
+  // Current player scores from their transfer-in time onwards.
+  function scoreForPos(pos,currentPick,multiplier){
+    if(!currentPick)return 0;
+    const history=posHistory[pos]||[];
+    let pts=0;
+    history.forEach((entry,i)=>{
+      const nextTs=i<history.length-1?history[i+1].ts:Infinity;
+      if(entry.player!==currentPick)pts+=getScoreWindow(entry.player,entry.ts,nextTs);
+    });
+    const currentStart=history.length>0?history[history.length-1].ts:lockedTs;
+    pts+=getScore(currentPick,currentStart)*multiplier;
+    return pts;
+  }
   let total=0;
-  if(picks.DEF)total+=getScore(picks.DEF,fromTs('DEF'));
-  if(picks.MID)total+=getScore(picks.MID,fromTs('MID'));
-  if(picks.ATT)total+=getScore(picks.ATT,fromTs('ATT'));
-  // Captain scores 2x. CAP is always a 4th separate player, so add twice.
-  if(picks.CAP)total+=getScore(picks.CAP,fromTs('CAP'))*2;
+  total+=scoreForPos('DEF',picks.DEF,1);
+  total+=scoreForPos('MID',picks.MID,1);
+  total+=scoreForPos('ATT',picks.ATT,1);
+  total+=scoreForPos('CAP',picks.CAP,2);
   return total;
 }
 

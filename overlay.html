@@ -280,17 +280,17 @@ async function fetchData() {
     const transferLog = await transferRes.json();
     if (!Array.isArray(events) || !Array.isArray(viewers)) return;
 
-    // Build transfer log lookup: { oauth_id: { POS: { player, ts } } }
+    // Build full ordered transfer history per position
     const tlog = {};
     if (Array.isArray(transferLog)) {
       transferLog.forEach(t => {
         if (!tlog[t.oauth_id]) tlog[t.oauth_id] = {};
         const ts = new Date(t.transferred_at).getTime();
         const pos = t.pos.replace('pick_', '').toUpperCase();
-        if (!tlog[t.oauth_id][pos] || ts > tlog[t.oauth_id][pos].ts) {
-          tlog[t.oauth_id][pos] = { player: t.player_name, ts };
-        }
+        if (!tlog[t.oauth_id][pos]) tlog[t.oauth_id][pos] = [];
+        tlog[t.oauth_id][pos].push({ player: t.player_name, ts });
       });
+      Object.values(tlog).forEach(pm => Object.keys(pm).forEach(p => pm[p].sort((a,b) => a.ts - b.ts)));
     }
 
     function getScore(name, fromTs = 0) {
@@ -298,22 +298,35 @@ async function fetchData() {
         .filter(e => e.player_name === name && new Date(e.created_at).getTime() > fromTs)
         .reduce((s, e) => s + Number(e.points), 0);
     }
+    function getScoreWindow(name, fromTs, toTs) {
+      return events
+        .filter(e => e.player_name === name && new Date(e.created_at).getTime() > fromTs && new Date(e.created_at).getTime() <= toTs)
+        .reduce((s, e) => s + Number(e.points), 0);
+    }
 
-    // Per-position fromTs: if player was transferred in, use transfer time; else use lock time
-    function calcFromTs(v, pos, playerName) {
-      const entry = v.oauth_id && tlog[v.oauth_id] && tlog[v.oauth_id][pos];
-      if (entry && entry.player === playerName) return entry.ts;
-      return v.events_at_lock || 0;
+    // scoreForPos: walk full history, banking points from outgoing players
+    function scoreForPos(v, pos, currentPick, multiplier) {
+      if (!currentPick) return 0;
+      const lockedTs = v.events_at_lock || 0;
+      const history = (v.oauth_id && tlog[v.oauth_id] && tlog[v.oauth_id][pos]) || [];
+      let pts = 0;
+      history.forEach((entry, i) => {
+        const nextTs = i < history.length - 1 ? history[i + 1].ts : Infinity;
+        if (entry.player !== currentPick) pts += getScoreWindow(entry.player, entry.ts, nextTs);
+      });
+      const currentStart = history.length > 0 ? history[history.length - 1].ts : lockedTs;
+      pts += getScore(currentPick, currentStart) * multiplier;
+      return pts;
     }
 
     const leaderboard = viewers
       .filter(v => v.locked)
       .map(v => {
         let pts = 0;
-        if (v.pick_def) pts += getScore(v.pick_def, calcFromTs(v, 'DEF', v.pick_def));
-        if (v.pick_mid) pts += getScore(v.pick_mid, calcFromTs(v, 'MID', v.pick_mid));
-        if (v.pick_att) pts += getScore(v.pick_att, calcFromTs(v, 'ATT', v.pick_att));
-        if (v.pick_cap) pts += getScore(v.pick_cap, calcFromTs(v, 'CAP', v.pick_cap)) * 2;
+        pts += scoreForPos(v, 'DEF', v.pick_def, 1);
+        pts += scoreForPos(v, 'MID', v.pick_mid, 1);
+        pts += scoreForPos(v, 'ATT', v.pick_att, 1);
+        pts += scoreForPos(v, 'CAP', v.pick_cap, 2);
         return { name: v.viewer_name, pts, cap: v.pick_cap||null, platform: v.platform||'manual' };
       })
       .sort((a, b) => b.pts - a.pts)
