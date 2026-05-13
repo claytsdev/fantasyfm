@@ -25,24 +25,6 @@ function loadAvatar(name){try{return localStorage.getItem('ffm_av_'+name)||null;
 function clearAvatars(){try{Object.keys(localStorage).filter(k=>k.startsWith('ffm_av_')).forEach(k=>localStorage.removeItem(k));}catch(e){}}
 
 async function load(){
-  // Inject rejoin panel into setup section if it doesn't already exist in HTML
-  if(!document.getElementById('sp-rejoin')){
-    const spUpload=document.getElementById('sp-upload');
-    if(spUpload){
-      const rejoinDiv=document.createElement('div');
-      rejoinDiv.id='sp-rejoin';
-      rejoinDiv.style.cssText='display:none;margin-top:16px;padding:16px;background:var(--card);border-radius:10px;border:1px solid var(--border)';
-      rejoinDiv.innerHTML=`
-        <div style="font-size:13px;color:var(--txt2);margin-bottom:10px">Already have an active session? Rejoin it here.</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="rejoin-code-input" placeholder="Session code e.g. FM-68MREA" style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--txt);font-size:14px;font-family:inherit" />
-          <button onclick="rejoinSession()" style="padding:8px 16px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:14px;font-weight:600">Rejoin</button>
-        </div>
-        <div id="rejoin-status" style="font-size:12px;margin-top:8px;color:var(--txt3)"></div>
-      `;
-      spUpload.parentNode.insertBefore(rejoinDiv, spUpload.nextSibling);
-    }
-  }
   try{
     const r=localStorage.getItem('ffm_state');
     if(r){
@@ -54,23 +36,15 @@ async function load(){
         S.seasonEnd=saved.seasonEnd||null;
         S.allowNewJoiners=saved.allowNewJoiners!==undefined?saved.allowNewJoiners:true;
         S.transfersPerViewer=saved.transfersPerViewer||3;
-        // Reload from DB
         await reloadFromDB();
         if(saved.isLive)restoreUI();
-      } else {
-        // No session in storage — show rejoin panel
-        const rp=document.getElementById('sp-rejoin');
-        if(rp)rp.style.display='block';
+        return;
       }
-    } else {
-      // No saved state at all — show rejoin panel
-      const rp=document.getElementById('sp-rejoin');
-      if(rp)rp.style.display='block';
     }
-  }catch(e){
-    const rp=document.getElementById('sp-rejoin');
-    if(rp)rp.style.display='block';
-  }
+  }catch(e){}
+  // No session in localStorage — show rejoin panel
+  const rp=document.getElementById('sp-rejoin');
+  if(rp)rp.style.display='block';
 }
 
 async function rejoinSession(){
@@ -86,25 +60,16 @@ async function rejoinSession(){
       status.style.color='var(--att)';status.textContent='Session not found. Check the code and try again.';
       return;
     }
-    // Restore state from DB
     S.sessionCode=session.id;
-    S.isLive=session.is_live||false;
+    S.isLive=true;
     S.type=session.type||'oneoff';
     S.seasonEnd=session.season_end||null;
     S.allowNewJoiners=session.allow_new_joiners!==undefined?session.allow_new_joiners:true;
     S.transfersPerViewer=session.transfers_per_viewer||3;
     await reloadFromDB();
     save();
-    if(S.isLive){
-      restoreUI();
-      status.style.color='var(--accent)';status.textContent='Session restored!';
-    } else {
-      // Session exists but is not live (e.g. season between streams)
-      S.isLive=true;
-      save();
-      restoreUI();
-      status.style.color='var(--accent)';status.textContent='Session restored!';
-    }
+    document.getElementById('sp-rejoin').style.display='none';
+    restoreUI();
   }catch(e){
     status.style.color='var(--att)';status.textContent='Error: '+e.message;
   }

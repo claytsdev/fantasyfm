@@ -199,6 +199,18 @@
         </div>
       </div>
     </div>
+    <div id="sp-rejoin" style="display:none">
+      <div class="card">
+        <div class="card-title">Rejoin existing session</div>
+        <div class="card-sub">Already have an active session? Enter your session code to reconnect from any browser or device.</div>
+        <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+          <input id="rejoin-code-input" placeholder="e.g. FM-68MREA" style="flex:1;padding:9px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--txt);font-size:14px;font-family:inherit;text-transform:uppercase" oninput="this.value=this.value.toUpperCase()" />
+          <button class="btn btn-accent" onclick="rejoinSession()">Rejoin</button>
+        </div>
+        <div id="rejoin-status" style="font-size:12px;margin-top:8px;min-height:16px"></div>
+      </div>
+    </div>
+
     <div id="sp-done" style="display:none">
       <div class="notice notice-ok" data-i18n="session_live">Session is live. Share the code with your viewers.</div>
       <div class="card">
