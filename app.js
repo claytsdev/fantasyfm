@@ -116,7 +116,8 @@ async function reloadFromDB(){
         oauthId:v.oauth_id||null,
         lockedAtTs:v.events_at_lock||0,
         transfersUsed:v.transfers_used||0,
-        isMod:v.is_mod||false
+        isMod:v.is_mod||false,
+        bankedPoints:v.banked_points||0
       };
     });
   }
@@ -247,7 +248,7 @@ function startAbly(){
 
     const applyViewer=(v)=>{
       if(!v||!v.viewer_name)return;
-      S.viewers[v.viewer_name]={picks:{DEF:v.pick_def||null,MID:v.pick_mid||null,ATT:v.pick_att||null,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};
+      S.viewers[v.viewer_name]={picks:{DEF:v.pick_def||null,MID:v.pick_mid||null,ATT:v.pick_att||null,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false,bankedPoints:v.banked_points||0};
     };
 
     const rerender=()=>{
@@ -1265,40 +1266,19 @@ function applyLang(){
 
 function sid(n){return n.replace(/[^a-zA-Z0-9]/g,'_');}
 function getScore(name,fromTs=0){return S.events.filter(e=>e.player===name&&(e.ts||0)>fromTs).reduce((s,e)=>s+Number(e.points),0);}
-function getScoreWindow(name,fromTs,toTs){return S.events.filter(e=>e.player===name&&(e.ts||0)>fromTs&&(e.ts||0)<=toTs).reduce((s,e)=>s+Number(e.points),0);}
 function getViewerScore(vname){
   const v=S.viewers[vname];if(!v)return 0;
   const picks=v.picks;
   const lockedTs=v.lockedAtTs||0;
-  const oauthId=v.oauthId||null;
-  const posHistory=(oauthId&&S.transferLog&&S.transferLog[oauthId])||{};
-  // scoreForPos: use outgoing/incoming pairs to build exact scoring windows.
-  // Outgoing entry = player left, score them from windowStart to entry.ts
-  // Incoming entry = new player arrived, update windowStart
-  function scoreForPos(pos,currentPick,multiplier){
-    if(!currentPick)return 0;
-    const history=posHistory[pos]||[];
-    if(!history.length)return getScore(currentPick,lockedTs)*multiplier;
-    let pts=0;
-    let windowStart=lockedTs;
-    history.forEach(entry=>{
-      if(entry.isOutgoing){
-        pts+=getScoreWindow(entry.player,windowStart,entry.ts);
-      } else {
-        windowStart=entry.ts;
-      }
-    });
-    const lastIncoming=history.filter(e=>!e.isOutgoing);
-    const currentStart=lastIncoming.length>0?lastIncoming[lastIncoming.length-1].ts:lockedTs;
-    pts+=getScore(currentPick,currentStart)*multiplier;
-    return pts;
-  }
-  let total=0;
-  total+=scoreForPos('DEF',picks.DEF,1);
-  total+=scoreForPos('MID',picks.MID,1);
-  total+=scoreForPos('ATT',picks.ATT,1);
-  total+=scoreForPos('CAP',picks.CAP,2);
-  return total;
+  const banked=v.bankedPoints||0;
+  // Current picks score from lockedTs (reset on each transfer)
+  // Banked points capture everything earned before the last transfer
+  let current=0;
+  if(picks.DEF)current+=getScore(picks.DEF,lockedTs);
+  if(picks.MID)current+=getScore(picks.MID,lockedTs);
+  if(picks.ATT)current+=getScore(picks.ATT,lockedTs);
+  if(picks.CAP)current+=getScore(picks.CAP,lockedTs)*2;
+  return banked+current;
 }
 
 // ── Season mid-roster management ─────────────────────────────────────────────
@@ -1635,7 +1615,7 @@ async function joinGame(){
   S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
   S.viewers={};
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false};});
+    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false,bankedPoints:v.banked_points||0};});
   }
   // Block NEW viewers (not yet in DB) if entries are locked — returning locked viewers can still access
   if(session.is_entries_locked && !S.viewers[name]){
@@ -2141,11 +2121,15 @@ async function submitTransfers(vname){
     return;
   }
   for(const {pos,newPlayer,displayPos} of changes){
-    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer});
+    // Send current score so server can bank it before applying transfer
+    const currentScore=getViewerScore(vname);
+    const res=await db('use_transfer',{session_id:S.sessionCode,oauth_id:oauthUser.oauthId,pos,new_player:newPlayer,current_score:currentScore});
     if(res&&res.error){alert('Transfer failed: '+res.error);return;}
-    // Update local state
+    // Update local state including banked points and new lock timestamp
     v.picks[displayPos]=newPlayer;
     v.transfersUsed=(v.transfersUsed||0)+1;
+    v.bankedPoints=currentScore;
+    v.lockedAtTs=Date.now();
   }
   showDash(vname);
 }
