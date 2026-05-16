@@ -1,4 +1,4 @@
-let S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+let S={sessionCode:null,viewerSessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
 let pendingMatch=[];
 let pendingMatchResult=null;
 function sanitise(str,maxLen=100){
@@ -1273,13 +1273,15 @@ function getViewerScore(vname){
   const picks=v.picks;
   const lockedTs=v.lockedAtTs||0;
   const banked=v.bankedPoints||0;
-  // Current picks score from lockedTs (reset on each transfer)
-  // Banked points capture everything earned before the last transfer
   let current=0;
-  if(picks.DEF)current+=getScore(picks.DEF,lockedTs);
-  if(picks.MID)current+=getScore(picks.MID,lockedTs);
-  if(picks.ATT)current+=getScore(picks.ATT,lockedTs);
-  if(picks.CAP)current+=getScore(picks.CAP,lockedTs)*2;
+  // Score each position — if it's also the captain, apply 2x multiplier
+  if(picks.DEF){const pts=getScore(picks.DEF,lockedTs);current+=picks.CAP===picks.DEF?pts*2:pts;}
+  if(picks.MID){const pts=getScore(picks.MID,lockedTs);current+=picks.CAP===picks.MID?pts*2:pts;}
+  if(picks.ATT){const pts=getScore(picks.ATT,lockedTs);current+=picks.CAP===picks.ATT?pts*2:pts;}
+  // If captain is a 4th player (not one of DEF/MID/ATT), add their score at 2x
+  if(picks.CAP&&picks.CAP!==picks.DEF&&picks.CAP!==picks.MID&&picks.CAP!==picks.ATT){
+    current+=getScore(picks.CAP,lockedTs)*2;
+  }
   return banked+current;
 }
 
@@ -1354,7 +1356,9 @@ async function logEvt(name,pos,evt,btnEl){
   try{
     const result=await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:SC[safePos][evt]});
     if(result&&result.error)throw new Error(result.error);
-    S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date().toLocaleTimeString(),ts:Date.now()});
+    // Use the DB-returned timestamp so scoring comparisons are in the same clock space
+    const evTs = result.created_at ? new Date(result.created_at).getTime() : Date.now();
+    S.events.push({player:name,pos,eventType:evt,points:SC[pos][evt],time:new Date(evTs).toLocaleTimeString(),ts:evTs});
     const el=document.getElementById('sc-'+sid(name));
     if(el){el.textContent=getScore(name);el.className='score-num has-pts';}
     refreshLog();refreshStats();renderLeague();
@@ -1379,7 +1383,8 @@ async function editScore(name, pos){
   const safeName = sanitise(name, 60);
   const safePos = (['DEF','MID','ATT'].includes(pos) ? pos : 'DEF');
   await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:'manual_adjust',points:diff});
-  S.events.push({player:name,pos,eventType:'manual_adjust',points:diff,time:new Date().toLocaleTimeString(),ts:Date.now()});
+  const adjTs = Date.now(); // manual adjustments use current time - no DB return here
+  S.events.push({player:name,pos,eventType:'manual_adjust',points:diff,time:new Date(adjTs).toLocaleTimeString(),ts:adjTs});
   renderScoring();refreshLog();refreshStats();renderLeague();renderInsights();
 }
 
@@ -1393,7 +1398,8 @@ async function logNeg(name,pos,evt,pts,btnEl){
   try{
     const result=await db('add_event',{session_id:S.sessionCode,player_name:safeName,pos:safePos,event_type:evt,points:safePts});
     if(result&&result.error)throw new Error(result.error);
-    S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date().toLocaleTimeString(),ts:Date.now()});
+    const negTs = result.created_at ? new Date(result.created_at).getTime() : Date.now();
+    S.events.push({player:name,pos,eventType:evt,points:pts,time:new Date(negTs).toLocaleTimeString(),ts:negTs});
     const el=document.getElementById('sc-'+sid(name));
     if(el){const s=getScore(name);el.textContent=s;el.className='score-num'+(s>0?' has-pts':s<0?' has-pts':' ');}
     refreshLog();refreshStats();renderLeague();
@@ -1481,12 +1487,18 @@ function viewerChangeSession() {
     localStorage.removeItem('ffm_last_viewer_code');
     localStorage.removeItem('ffm_state');
   } catch(e) {}
-  // Reset session state but keep OAuth identity
-  S.sessionCode = null;
-  S.isLive = false;
-  S.roster = [];
-  S.events = [];
-  S.viewers = {};
+  // Reset viewer session state but keep streamer session intact
+  S.viewerSessionCode = null;
+  const myStreamerSession = localStorage.getItem('ffm_streamer_session');
+  const iAmStreamer = checkStreamerAuth() && myStreamerSession && myStreamerSession === S.sessionCode;
+  if (!iAmStreamer) {
+    S.sessionCode = null;
+    S.isLive = false;
+    S.roster = [];
+    S.events = [];
+    S.viewers = {};
+  }
+  window._viewerState = {};
   stopAbly();
   // Hide picker/dash, show join form
   const joinDiv = document.getElementById('vp-join');
@@ -1553,7 +1565,11 @@ async function autoRejoinViewer(){
   try{
     // Skip if streamer already has their own active session loaded
     const myStreamerSession = localStorage.getItem('ffm_streamer_session');
-    if(checkStreamerAuth() && myStreamerSession && S.sessionCode === myStreamerSession) return;
+    if(checkStreamerAuth() && myStreamerSession && S.sessionCode === myStreamerSession) {
+      // Streamer is active — still allow them to rejoin viewer session separately
+      // but don't auto-trigger it, they can do it manually
+      return;
+    }
     const oauth = localStorage.getItem('ffm_oauth');
     if(!oauth) return;
     const user = JSON.parse(oauth);
@@ -1614,27 +1630,60 @@ async function joinGame(){
   const roster=await db('get_roster',{session_id:code});
   const events=await db('get_events',{session_id:code});
   const viewers=await db('get_viewers',{session_id:code});
-  S.sessionCode=code;
-  S.isLive=true;
-  S.roster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
-  S.events=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
-  S.viewers={};
+
+  // ── CRITICAL FIX: viewer state is stored separately from streamer state ──
+  // Never overwrite S.sessionCode (streamer's own session). Use S.viewerSessionCode instead.
+  S.viewerSessionCode=code;
+
+  // Viewer-side roster and events are stored locally, NOT in S.roster/S.events
+  // (which belong to the streamer). We use separate viewer state objects.
+  const vRoster=Array.isArray(roster)?roster.map(p=>({name:p.name,pos:p.pos,avatar:loadAvatar(p.name)})):[];
+  const vEvents=Array.isArray(events)?events.map(e=>({player:e.player_name,pos:e.pos,eventType:e.event_type,points:Number(e.points),time:new Date(e.created_at).toLocaleTimeString(),ts:new Date(e.created_at).getTime()})):[];
+
+  // Store viewer session data under a namespaced key so it doesn't collide with streamer state
+  window._viewerState = window._viewerState || {};
+  window._viewerState[code] = { roster: vRoster, events: vEvents, viewers: {} };
+
   if(Array.isArray(viewers)){
-    viewers.forEach(v=>{S.viewers[v.viewer_name]={picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,isMod:v.is_mod||false,bankedPoints:v.banked_points||0};});
+    viewers.forEach(v=>{
+      window._viewerState[code].viewers[v.viewer_name]={
+        picks:{DEF:v.pick_def,MID:v.pick_mid,ATT:v.pick_att,CAP:v.pick_cap||null},
+        locked:v.locked,platform:v.platform||'manual',oauthId:v.oauth_id||null,
+        lockedAtTs:v.events_at_lock||0,transfersUsed:v.transfers_used||0,
+        isMod:v.is_mod||false,bankedPoints:v.banked_points||0
+      };
+    });
+  }
+
+  // Also update S.viewers for the viewer tab rendering (read-only, won't corrupt streamer)
+  // Only update if we are NOT currently the streamer with an active session
+  const myStreamerSession = localStorage.getItem('ffm_streamer_session');
+  const iAmStreamer = checkStreamerAuth() && myStreamerSession && myStreamerSession === S.sessionCode;
+  if (!iAmStreamer) {
+    // Safe to update shared state — we are in viewer-only mode
+    S.sessionCode = code;
+    S.isLive = true;
+    S.roster = vRoster;
+    S.events = vEvents;
+    S.viewers = window._viewerState[code].viewers;
+  } else {
+    // We are the streamer viewing another session — keep S.sessionCode intact
+    // Viewer tab uses window._viewerState directly
+    S.viewers = { ...S.viewers, ...window._viewerState[code].viewers };
   }
   // Block NEW viewers (not yet in DB) if entries are locked — returning locked viewers can still access
   if(session.is_entries_locked && !S.viewers[name]){
     err.style.display='block';
     err.textContent='New entries are currently closed. Wait for the streamer to open entries.';
-    S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+    S.viewerSessionCode=null;
     return;
   }
   if(!S.viewers[name])S.viewers[name]={picks:{DEF:null,MID:null,ATT:null,CAP:null},locked:false,transfersUsed:0};
   // Block new viewers if season doesn't allow new joiners
-  if(S.type==='season'&&!S.allowNewJoiners&&!S.viewers[name].locked){
+  if(S.type==='season'&&!S.allowNewJoiners&&!S.viewers[name]?.locked){
     err.style.display='block';
     err.textContent='This season is not accepting new players.';
-    S={sessionCode:null,roster:[],events:[],viewers:{},isLive:false,type:'oneoff',seasonEnd:null,allowNewJoiners:true,transfersPerViewer:3};
+    S.viewerSessionCode=null;
     return;
   }
   // Restore any locally saved picks (in case they were picking before DB updated)
@@ -2140,7 +2189,14 @@ async function submitTransfers(vname){
     v.picks[displayPos]=newPlayer;
     v.transfersUsed=(v.transfersUsed||0)+1;
     v.bankedPoints=scoreNow;
-    v.lockedAtTs=res&&res.events_at_lock?res.events_at_lock:Date.now();
+    // events_at_lock from DB is an ISO string — convert to ms for consistent comparison
+    if(res&&res.events_at_lock){
+      v.lockedAtTs = typeof res.events_at_lock === 'number'
+        ? res.events_at_lock
+        : new Date(res.events_at_lock).getTime();
+    } else {
+      v.lockedAtTs = Date.now();
+    }
   }
   showDash(vname);
 }
