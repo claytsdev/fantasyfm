@@ -18,3 +18,8 @@
   [headers.values]
     X-Frame-Options = "SAMEORIGIN"
     Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/oauth-callback.html"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FantasyFM — Authenticating…</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0e0f13;
+  font-family: 'Barlow', sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  color: #e8eaf0;
+}
+.box {
+  text-align: center;
+  padding: 40px;
+}
+.spinner {
+  width: 32px; height: 32px;
+  border: 3px solid #2a1450;
+  border-top-color: #9b4dff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+h2 { font-size: 18px; color: #8b90a8; font-weight: 400; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="spinner"></div>
+  <h2>Authenticating…</h2>
+</div>
+<script>
+// This page is opened in a popup by the main app.
+// Pass credentials back via localStorage then close.
+const params = new URLSearchParams(window.location.search);
+const oauth = params.get('oauth');
+const username = params.get('username');
+const id = params.get('id');
+const avatar = params.get('avatar');
+const session = params.get('session');
+const msg = params.get('msg');
+
+if (oauth === 'error') {
+  document.querySelector('h2').textContent = 'Auth failed: ' + (msg || 'Unknown error');
+} else if (oauth && username) {
+  // Store in localStorage so opener can read it
+  try {
+    localStorage.setItem('ffm_oauth_pending', JSON.stringify({
+      platform: oauth,
+      username: username,
+      oauthId: id,
+      avatar: avatar,
+      session: session,
+      ts: Date.now(),
+    }));
+  } catch(e) {}
+  window.close();
+}
+</script>
+</body>
+</html>

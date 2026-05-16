@@ -1,0 +1,11 @@
+{
+  "name": "fantasyfm-v2",
+  "version": "2.0.0",
+  "description": "FantasyFM v2 — Football Manager fantasy league for streamers",
+  "private": true,
+  "dependencies": {
+    "@supabase/supabase-js": "^2.43.0",
+    "ably": "^2.3.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
